@@ -26,15 +26,26 @@ class BatchProcessor:
     Handles time point detection, baseline tracking, and percentage change calculations.
     """
     
-    def __init__(self, output_dir: str = "outputs"):
+    def __init__(self, output_dir: str = "outputs", create_timestamped_subfolder: bool = False):
         """
         Initialize batch processor.
         
         Args:
-            output_dir: Directory for output files
+            output_dir: Base directory for output files
+            create_timestamped_subfolder: If True, create a timestamped subfolder
         """
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(exist_ok=True)
+        self.base_output_dir = Path(output_dir)
+        self.base_output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create timestamped subfolder if requested
+        if create_timestamped_subfolder:
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            self.output_dir = self.base_output_dir / timestamp
+            self.output_dir.mkdir(exist_ok=True)
+            logger.info(f"Created timestamped output folder: {self.output_dir}")
+        else:
+            self.output_dir = self.base_output_dir
+        
         self.time_parser = TimePointParser()
         
     def process_time_series(

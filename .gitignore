@@ -61,3 +61,6 @@ test_images/
 CLAUDE.md
 ignore.txt
 
+# User configuration
+.app_config.json
+
