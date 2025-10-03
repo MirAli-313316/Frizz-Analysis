@@ -1,0 +1,30 @@
+# Core Computer Vision
+segment-anything @ git+https://github.com/facebookresearch/segment-anything.git
+opencv-python>=4.8.0
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Image Processing
+Pillow>=10.0.0
+numpy>=1.24.0
+scipy>=1.11.0
+scikit-image>=0.21.0
+
+# Data Management
+pandas>=2.0.0
+openpyxl>=3.1.0
+xlsxwriter>=3.1.0  # Better Excel formatting
+pydantic>=2.0.0
+
+# GUI
+tkinter  # Usually comes with Python
+customtkinter>=5.0.0  # Modern looking Tkinter
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Utilities
+python-dotenv>=1.0.0
+tqdm>=4.65.0  # Progress bars
+natsort>=8.0.0  # Natural sorting for filenames
