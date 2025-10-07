@@ -64,3 +64,4 @@ ignore.txt
 # User configuration
 .app_config.json
 
+src/__pycache__/analysis.cpython-311.pyc
