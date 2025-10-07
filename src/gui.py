@@ -21,6 +21,7 @@ import traceback
 from .batch_processor import BatchProcessor
 from .time_parser import TimePointParser
 from .analysis import ImageAnalysis
+from .config import AppConfig
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -40,12 +41,16 @@ class FrizzAnalysisGUI:
         self.root.title("Hair Frizz Analysis Tool")
         self.root.geometry("1200x800")
         
+        # Load configuration
+        self.config = AppConfig()
+        
         # Data storage
         self.selected_files: List[str] = []
         self.time_points: List = []
         self.results: List[ImageAnalysis] = []
         self.excel_path: Optional[Path] = None
         self.summary_df: Optional[pd.DataFrame] = None
+        self.output_folder_path: Optional[Path] = None  # Full path including timestamp
         
         # Processing state
         self.processing = False
@@ -94,6 +99,46 @@ class FrizzAnalysisGUI:
             font=ctk.CTkFont(size=18, weight="bold")
         )
         title_label.pack(pady=(15, 10))
+        
+        # --- Output Location Section ---
+        output_section = ctk.CTkFrame(left_frame)
+        output_section.pack(fill="x", padx=15, pady=(0, 10))
+        
+        output_title = ctk.CTkLabel(
+            output_section,
+            text="Output Location:",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            anchor="w"
+        )
+        output_title.pack(fill="x", padx=10, pady=(10, 5))
+        
+        # Output path display and browse button
+        output_controls = ctk.CTkFrame(output_section, fg_color="transparent")
+        output_controls.pack(fill="x", padx=10, pady=(0, 10))
+        
+        # Entry for output path (read-only)
+        self.output_path_var = tk.StringVar(value=self.config.get_last_output_folder())
+        self.output_entry = ctk.CTkEntry(
+            output_controls,
+            textvariable=self.output_path_var,
+            state="readonly",
+            width=240
+        )
+        self.output_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        # Browse button
+        self.browse_output_btn = ctk.CTkButton(
+            output_controls,
+            text="Browse...",
+            command=self._browse_output_folder,
+            width=80,
+            height=28
+        )
+        self.browse_output_btn.pack(side="left")
+        
+        # Separator
+        separator = ctk.CTkFrame(left_frame, height=2, fg_color="gray30")
+        separator.pack(fill="x", padx=15, pady=10)
         
         # Button frame
         button_frame = ctk.CTkFrame(left_frame, fg_color="transparent")
@@ -305,6 +350,39 @@ class FrizzAnalysisGUI:
     
     # --- Event Handlers ---
     
+    def _browse_output_folder(self):
+        """Open folder dialog to select output location."""
+        initial_dir = self.config.get_last_output_folder()
+        
+        folder = filedialog.askdirectory(
+            title="Select Output Folder",
+            initialdir=initial_dir
+        )
+        
+        if folder:
+            # Validate that folder is writable
+            folder_path = Path(folder)
+            try:
+                # Try to create it if it doesn't exist
+                folder_path.mkdir(parents=True, exist_ok=True)
+                
+                # Test write access
+                test_file = folder_path / '.write_test'
+                test_file.touch()
+                test_file.unlink()
+                
+                # Update UI and config
+                self.output_path_var.set(folder)
+                self.config.set_last_output_folder(folder)
+                logger.info(f"Output folder set to: {folder}")
+                
+            except Exception as e:
+                logger.error(f"Cannot write to folder: {e}")
+                messagebox.showerror(
+                    "Invalid Folder",
+                    f"Cannot write to selected folder:\n{folder}\n\nError: {str(e)}"
+                )
+    
     def _select_images(self):
         """Open file dialog to select images."""
         filetypes = [
@@ -312,13 +390,23 @@ class FrizzAnalysisGUI:
             ("All files", "*.*")
         ]
         
+        # Use last input folder if available
+        initial_dir = self.config.get_last_input_folder()
+        
         files = filedialog.askopenfilenames(
             title="Select Hair Tress Images",
-            filetypes=filetypes
+            filetypes=filetypes,
+            initialdir=initial_dir
         )
         
         if files:
             self.selected_files = list(files)
+            
+            # Save the directory of first file as last input folder
+            if files:
+                first_file_dir = str(Path(files[0]).parent)
+                self.config.set_last_input_folder(first_file_dir)
+            
             self._update_file_list()
             self.process_btn.configure(state="normal")
             self._update_status(f"Selected {len(files)} images")
@@ -416,13 +504,34 @@ class FrizzAnalysisGUI:
     def _process_thread(self):
         """Background thread for processing images."""
         try:
-            # Create batch processor
-            processor = BatchProcessor(output_dir="outputs")
+            # Get base output directory from config
+            base_output_dir = self.output_path_var.get()
+            
+            # Validate output directory
+            base_output_path = Path(base_output_dir)
+            try:
+                base_output_path.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                raise RuntimeError(f"Cannot create output directory: {e}")
+            
+            # Create batch processor with timestamped subfolder
+            processor = BatchProcessor(
+                output_dir=base_output_dir,
+                create_timestamped_subfolder=True
+            )
+            
+            # Store the full output path for later use
+            self.output_folder_path = processor.output_dir
+            
+            # Display output path
+            self.root.after(0, self._update_status, 
+                           f"Saving results to: {self.output_folder_path}")
             
             total_images = len(self.selected_files)
             
             # Process each image with progress updates
-            self._update_status(f"Processing {total_images} images...")
+            self.root.after(0, self._update_status, 
+                           f"Processing {total_images} images...")
             
             results = []
             for i, filepath in enumerate(self.selected_files):
@@ -436,7 +545,7 @@ class FrizzAnalysisGUI:
                     result = analyze_image(
                         filepath,
                         visualize=True,
-                        output_dir="outputs",
+                        output_dir=str(processor.output_dir),
                         max_processing_dim=1024
                     )
                     results.append(result)
@@ -481,9 +590,9 @@ class FrizzAnalysisGUI:
             # Update UI with results
             self.root.after(0, self._display_results)
             
-            # Success
-            self.root.after(0, self._update_status, 
-                           f"✓ Processing complete! {len(results)} images analyzed.")
+            # Success - show full path
+            success_msg = f"✓ Processing complete! Results saved to: {self.output_folder_path}"
+            self.root.after(0, self._update_status, success_msg)
             self.root.after(0, self._processing_complete)
             
         except Exception as e:
@@ -501,7 +610,17 @@ class FrizzAnalysisGUI:
         self.select_btn.configure(state="normal")
         self.clear_btn.configure(state="normal")
         
-        # Open Excel file if generated
+        # Show message with option to open results folder
+        if self.output_folder_path and self.output_folder_path.exists():
+            response = messagebox.askyesno(
+                "Processing Complete",
+                f"Analysis complete!\n\nResults saved to:\n{self.output_folder_path}\n\nOpen results folder?",
+                icon='info'
+            )
+            if response:
+                self._open_results_folder()
+        
+        # Also open Excel file
         if self.excel_path and self.excel_path.exists():
             try:
                 os.startfile(str(self.excel_path))  # Windows
@@ -514,6 +633,25 @@ class FrizzAnalysisGUI:
                         subprocess.call(['xdg-open', str(self.excel_path)])  # Linux
                     except:
                         logger.warning("Could not auto-open Excel file")
+    
+    def _open_results_folder(self):
+        """Open the results folder in file explorer."""
+        if not self.output_folder_path or not self.output_folder_path.exists():
+            messagebox.showwarning("No Results", "No results folder to open yet.")
+            return
+        
+        try:
+            if sys.platform == 'win32':
+                os.startfile(str(self.output_folder_path))
+            elif sys.platform == 'darwin':
+                import subprocess
+                subprocess.call(['open', str(self.output_folder_path)])
+            else:  # linux
+                import subprocess
+                subprocess.call(['xdg-open', str(self.output_folder_path)])
+        except Exception as e:
+            logger.error(f"Could not open results folder: {e}")
+            messagebox.showerror("Error", f"Could not open results folder:\n{str(e)}")
     
     def _update_progress(self, value: float, status: str):
         """Update progress bar and status."""
@@ -599,8 +737,8 @@ class FrizzAnalysisGUI:
         if not self.results:
             return
         
-        # Update dropdown
-        output_dir = Path("outputs")
+        # Use the timestamped output folder if available
+        output_dir = self.output_folder_path if self.output_folder_path else Path("outputs")
         image_names = []
         
         for result in self.results:
@@ -622,8 +760,8 @@ class FrizzAnalysisGUI:
         if choice == "No images processed":
             return
         
-        # Find and display image
-        output_dir = Path("outputs")
+        # Use the timestamped output folder if available
+        output_dir = self.output_folder_path if self.output_folder_path else Path("outputs")
         image_path = output_dir / f"analysis_{choice}.jpg"
         
         if not image_path.exists():
@@ -690,14 +828,29 @@ class FrizzAnalysisGUI:
         )
         path_label.pack(pady=5)
         
-        # Open button
-        open_btn = ctk.CTkButton(
-            info_card,
-            text="📂 Open Excel File",
+        # Buttons frame
+        btn_frame = ctk.CTkFrame(info_card, fg_color="transparent")
+        btn_frame.pack(pady=10)
+        
+        # Open Excel button
+        open_excel_btn = ctk.CTkButton(
+            btn_frame,
+            text="📊 Open Excel File",
             command=lambda: os.startfile(str(self.excel_path)),
-            height=35
+            height=35,
+            width=180
         )
-        open_btn.pack(pady=10)
+        open_excel_btn.pack(side="left", padx=5)
+        
+        # Open Results Folder button
+        open_folder_btn = ctk.CTkButton(
+            btn_frame,
+            text="📂 Open Results Folder",
+            command=self._open_results_folder,
+            height=35,
+            width=180
+        )
+        open_folder_btn.pack(side="left", padx=5)
         
         # Display summary dataframe
         if self.summary_df is not None and not self.summary_df.empty:
