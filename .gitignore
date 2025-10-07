@@ -16,6 +16,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
+cat .gitignore | grep -E "(__pycache__|\.pyc)"
 
 # Virtual environments
 venv/
@@ -64,4 +65,4 @@ ignore.txt
 # User configuration
 .app_config.json
 
-src/__pycache__/analysis.cpython-311.pyc
+
