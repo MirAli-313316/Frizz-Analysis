@@ -546,7 +546,7 @@ class FrizzAnalysisGUI:
                         filepath,
                         visualize=True,
                         output_dir=str(processor.output_dir),
-                        max_processing_dim=1024
+                        num_expected_tresses=7
                     )
                     results.append(result)
                 except Exception as e:

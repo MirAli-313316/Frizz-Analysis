@@ -52,7 +52,7 @@ class BatchProcessor:
         self,
         image_paths: List[str],
         visualize: bool = True,
-        max_processing_dim: int = 1024
+        num_expected_tresses: int = 7
     ) -> Tuple[List[ImageAnalysis], pd.DataFrame]:
         """
         Process a time series of images.
@@ -60,7 +60,7 @@ class BatchProcessor:
         Args:
             image_paths: List of image file paths
             visualize: Whether to generate visualizations
-            max_processing_dim: Max dimension for SAM processing
+            num_expected_tresses: Expected number of tresses (for validation)
         
         Returns:
             Tuple of (analysis_results, summary_dataframe)
@@ -100,7 +100,7 @@ class BatchProcessor:
                     image_path,
                     visualize=visualize,
                     output_dir=str(self.output_dir),
-                    max_processing_dim=max_processing_dim
+                    num_expected_tresses=num_expected_tresses
                 )
                 results.append(result)
             except Exception as e:

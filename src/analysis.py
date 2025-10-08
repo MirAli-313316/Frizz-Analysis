@@ -13,7 +13,8 @@ import logging
 from dataclasses import dataclass, asdict
 
 from .calibration import detect_quarter
-from .segmentation import segment_tresses, SegmentationResult, TressMask
+from .segmentation import segment_all_tresses, load_sam2_model, SegmentationResult, TressMask, visualize_segmentation
+from .tress_detector import detect_tress_regions, visualize_tress_detection
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -83,22 +84,23 @@ def analyze_image(
     image_path: str,
     visualize: bool = False,
     output_dir: Optional[str] = None,
-    max_processing_dim: int = 1024
+    num_expected_tresses: int = 7
 ) -> ImageAnalysis:
     """
-    Complete analysis of hair tress image: calibration + segmentation + area calculation.
+    Complete analysis of hair tress image: calibration + detection + segmentation + area calculation.
     
     Processing steps:
     1. Detect quarter and calculate calibration factor (cm²/pixel)
-    2. Run SAM segmentation to detect tress masks
-    3. Calculate surface area for each tress (pixels × calibration_factor)
-    4. Optionally generate visualization overlays
+    2. Detect tress regions using OpenCV (fast, lightweight)
+    3. Run SAM 2 segmentation on each tress crop at high resolution
+    4. Calculate surface area for each tress (pixels × calibration_factor)
+    5. Optionally generate visualization overlays
     
     Args:
         image_path: Path to image file
         visualize: Whether to generate visualization images
         output_dir: Directory for visualization outputs (default: outputs/)
-        max_processing_dim: Max dimension for SAM processing (memory optimization)
+        num_expected_tresses: Expected number of tresses (for validation warning)
     
     Returns:
         ImageAnalysis object with complete results
@@ -120,6 +122,12 @@ def analyze_image(
     logger.info(f"Analyzing: {image_name}")
     logger.info(f"=" * 70)
     
+    # Load image once for all processing steps
+    image = cv2.imread(str(image_path))
+    if image is None:
+        raise ValueError(f"Could not load image: {image_path}")
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    
     # Step 1: Calibration - detect quarter and get cm²/pixel factor
     logger.info("Step 1: Calibrating with quarter...")
     try:
@@ -131,11 +139,11 @@ def analyze_image(
                    f"radius={quarter_result.quarter_radius:.1f}px")
         logger.info(f"✓ Calibration factor: {calibration_factor:.6f} cm²/pixel")
         
-        # Create exclude region around quarter for segmentation
+        # Create exclude region around quarter for tress detection
         qx, qy = quarter_result.quarter_center
         qr = int(quarter_result.quarter_radius)
         margin = 50
-        exclude_region = (
+        calibration_box = (
             max(0, qx - qr - margin),
             max(0, qy - qr - margin),
             (qr + margin) * 2,
@@ -146,31 +154,51 @@ def analyze_image(
         logger.error(f"Calibration failed: {e}")
         raise
     
-    # Step 2: Segmentation - detect tress masks
-    logger.info("Step 2: Segmenting hair tresses...")
+    # Step 2: Detect tress regions using OpenCV
+    logger.info("Step 2: Detecting tress regions...")
     try:
-        seg_result = segment_tresses(
-            str(image_path),
-            exclude_region=exclude_region,
-            min_tress_area=200000,  # ~10 cm²
-            max_tress_area=1800000,  # ~90 cm²
-            brightness_threshold=150,
-            max_processing_dim=max_processing_dim
+        tress_boxes = detect_tress_regions(
+            image_rgb,
+            calibration_box=calibration_box,
+            num_expected_tresses=num_expected_tresses
         )
         
-        logger.info(f"✓ Detected {len(seg_result.tresses)} tresses")
+        logger.info(f"✓ Detected {len(tress_boxes)} tress regions")
+        
+    except Exception as e:
+        logger.error(f"Tress detection failed: {e}")
+        raise
+    
+    # Step 3: Segment tresses using SAM 2 crop-based processing
+    logger.info("Step 3: Segmenting tresses with SAM 2...")
+    try:
+        # Load SAM 2 model (cached after first call)
+        predictor = load_sam2_model()
+        
+        # Segment all tresses
+        seg_result = segment_all_tresses(
+            image_rgb,
+            tress_boxes,
+            predictor=predictor
+        )
+        
+        logger.info(f"✓ Segmented {len(seg_result.tresses)} tresses")
         
     except Exception as e:
         logger.error(f"Segmentation failed: {e}")
         raise
     
-    # Step 3: Calculate surface areas
-    logger.info("Step 3: Calculating surface areas...")
+    # Step 4: Calculate surface areas
+    logger.info("Step 4: Calculating surface areas...")
     tress_analyses = []
     
     for tress_mask in seg_result.tresses:
         # Calculate area in cm² = pixel_count × calibration_factor
         area_cm2 = tress_mask.area_pixels * calibration_factor
+        
+        # Calculate aspect ratio from bbox
+        _, _, w, h = tress_mask.bbox
+        aspect_ratio = h / w if w > 0 else 0
         
         tress_analysis = TressAnalysis(
             tress_id=tress_mask.id,
@@ -178,37 +206,44 @@ def analyze_image(
             pixel_count=int(tress_mask.area_pixels),
             bbox=tress_mask.bbox,
             center=tress_mask.center,
-            aspect_ratio=tress_mask.aspect_ratio,
+            aspect_ratio=aspect_ratio,
             confidence=tress_mask.confidence
         )
         
         tress_analyses.append(tress_analysis)
         logger.info(f"  Tress {tress_mask.id}: {area_cm2:.2f} cm² "
-                   f"({int(tress_mask.area_pixels)} pixels)")
+                   f"({int(tress_mask.area_pixels)} pixels, crop: {tress_mask.crop_size[0]}x{tress_mask.crop_size[1]})")
     
     total_area = sum(t.area_cm2 for t in tress_analyses)
     logger.info(f"✓ Total surface area: {total_area:.2f} cm²")
     
-    # Step 4: Optional visualization
+    # Step 5: Optional visualization
     if visualize:
-        logger.info("Step 4: Generating visualizations...")
+        logger.info("Step 5: Generating visualizations...")
         if output_dir is None:
             output_dir = Path("outputs")
         else:
             output_dir = Path(output_dir)
-        output_dir.mkdir(exist_ok=True)
+        output_dir.mkdir(exist_ok=True, parents=True)
         
+        # Save tress detection visualization
+        detection_viz = visualize_tress_detection(image_rgb, tress_boxes, calibration_box)
+        detection_path = output_dir / f"tress_detection_{image_name}.jpg"
+        cv2.imwrite(str(detection_path), cv2.cvtColor(detection_viz, cv2.COLOR_RGB2BGR))
+        logger.info(f"✓ Saved tress detection to {detection_path.name}")
+        
+        # Save segmentation visualization
         _create_analysis_visualization(
             str(image_path),
             seg_result,
-        tress_analyses,
-        {
-            'center': quarter_result.quarter_center,
-            'radius': quarter_result.quarter_radius
-        },
-        output_dir / f"analysis_{image_name}.jpg"
+            tress_analyses,
+            {
+                'center': quarter_result.quarter_center,
+                'radius': quarter_result.quarter_radius
+            },
+            output_dir / f"analysis_{image_name}.jpg"
         )
-        logger.info(f"✓ Saved visualization to outputs/")
+        logger.info(f"✓ Saved segmentation analysis to analysis_{image_name}.jpg")
     
     processing_time = time.time() - start_time
     logger.info(f"✓ Analysis complete in {processing_time:.2f}s")
@@ -371,7 +406,7 @@ def batch_analyze_images(
     image_paths: List[str],
     visualize: bool = False,
     output_dir: Optional[str] = None,
-    max_processing_dim: int = 1024
+    num_expected_tresses: int = 7
 ) -> List[ImageAnalysis]:
     """
     Analyze multiple images in batch.
@@ -380,7 +415,7 @@ def batch_analyze_images(
         image_paths: List of image file paths
         visualize: Whether to generate visualizations
         output_dir: Directory for outputs
-        max_processing_dim: Max dimension for SAM processing
+        num_expected_tresses: Expected number of tresses (for validation)
     
     Returns:
         List of ImageAnalysis results
@@ -397,7 +432,7 @@ def batch_analyze_images(
                 image_path,
                 visualize=visualize,
                 output_dir=output_dir,
-                max_processing_dim=max_processing_dim
+                num_expected_tresses=num_expected_tresses
             )
             results.append(result)
         except Exception as e:
