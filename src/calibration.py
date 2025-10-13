@@ -88,7 +88,7 @@ def _detect_coin_sam2_optimized_quarter(region_bgr: np.ndarray,
         input_labels = np.array([1], dtype=np.int32)
 
         try:
-            predictor = load_sam2_model("models/sam2_hiera_tiny.pt")
+            predictor = load_sam2_model()  # Use same model as segmentation (Large)
             with torch.inference_mode():
                 predictor.set_image(region_rgb)
                 masks, scores, logits = predictor.predict(
@@ -194,9 +194,10 @@ def detect_quarter(
     expected_tresses: int = 6
 ) -> CalibrationResult:
     """
-    Detect US quarter in top-left region of image using SAM 2 Hiera Tiny.
+    Detect US quarter in top-left region of image using SAM 2 Large (same as segmentation).
 
-    Uses optimized SAM 2 parameters specifically tuned for quarter detection.
+    Uses hybrid Hough Circle + SAM 2 approach for reliable quarter detection.
+    Uses the same SAM 2 Large model as the segmentation process for consistency.
 
     Args:
         image_path: Path to the image file
@@ -219,19 +220,19 @@ def detect_quarter(
     height, width = image.shape[:2]
     logger.info(f"Image dimensions: {width}x{height} pixels")
 
-    # Use SAM 2 Hiera Tiny for quarter detection (optimized for this task)
+    # Use SAM 2 Large for quarter detection (same model as segmentation)
     roi_h = min(700, height)
     roi_w = min(700, width)
     roi = image[:roi_h, :roi_w].copy()
 
-    logger.info("Detecting quarter with SAM 2 Hiera Tiny (optimized for coin detection)...")
+    logger.info("Detecting quarter with SAM 2 (consistent with segmentation model)...")
     sam2_coin = _detect_coin_sam2_optimized_quarter(roi, expected_tresses=expected_tresses)
     if sam2_coin is not None:
         rx, ry, rr = sam2_coin
         quarter_area_pixels = np.pi * rr * rr
         calibration_factor = QUARTER_AREA_CM2 / quarter_area_pixels
         confidence = _calculate_confidence_simple(roi, rx, ry, rr)
-        logger.info(f"SAM2 Tiny quarter: center=({rx}, {ry}), radius={rr}px (fixed 700x700 ROI)")
+        logger.info(f"SAM2 quarter: center=({rx}, {ry}), radius={rr}px (fixed 700x700 ROI)")
         return CalibrationResult(
             calibration_factor=calibration_factor,
             quarter_center=(rx, ry),
@@ -243,7 +244,7 @@ def detect_quarter(
 
     # SAM 2 detection failed
     raise ValueError(
-        "SAM 2 Hiera Tiny coin detection failed on the fixed 700x700 top-left crop. "
+        "SAM 2 coin detection failed on the fixed 700x700 top-left crop. "
         "Try brightening or shifting the coin slightly, ensure it is fully within the top-left 700px."
     )
 
