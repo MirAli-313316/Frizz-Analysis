@@ -60,7 +60,7 @@ def test_tress_detection():
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         
         # Detect tresses (without calibration box for this test)
-        tress_boxes = detect_tress_regions(image_rgb, calibration_box=None)
+        tress_boxes = detect_tress_regions(image_rgb, calibration_box=None, num_expected_tresses=6)
         
         if len(tress_boxes) > 0:
             logger.info(f"✓ Detected {len(tress_boxes)} tresses")
@@ -145,7 +145,7 @@ def test_full_analysis():
             test_image,
             visualize=True,
             output_dir="outputs/test",
-            num_expected_tresses=7
+            num_expected_tresses=6
         )
         
         logger.info(f"✓ Analysis complete!")

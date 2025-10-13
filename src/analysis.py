@@ -131,7 +131,7 @@ def analyze_image(
     # Step 1: Calibration - detect quarter and get cm²/pixel factor
     logger.info("Step 1: Calibrating with quarter...")
     try:
-        quarter_result = detect_quarter(str(image_path))
+        quarter_result = detect_quarter(str(image_path), expected_tresses=num_expected_tresses)
         
         calibration_factor = quarter_result.calibration_factor
         

@@ -23,6 +23,137 @@ QUARTER_DIAMETER_CM = 2.426
 QUARTER_AREA_CM2 = 4.62
 
 
+def _detect_coin_sam2_optimized_quarter(region_bgr: np.ndarray,
+                                        expected_tresses: int) -> Optional[Tuple[int, int, int]]:
+    """
+    Detect US quarter using hybrid approach: Hough circles for detection, SAM 2 for segmentation.
+
+    This approach leverages the strengths of both methods:
+    1. Hough Circle detection reliably finds circular objects
+    2. SAM 2 provides precise segmentation boundaries
+
+    Args:
+        region_bgr: Input region in BGR format
+        expected_tresses: Expected number of tresses (for compatibility)
+
+    Returns (cx, cy, r) in region coordinates. No resizing is performed.
+    """
+    try:
+        import torch
+        from .segmentation import load_sam2_model
+    except Exception:
+        return None
+
+    # Convert to RGB for SAM 2
+    region_rgb = cv2.cvtColor(region_bgr, cv2.COLOR_BGR2RGB)
+    h, w = region_rgb.shape[:2]
+
+    logger.info(f"Detecting quarter in {w}x{h} region using hybrid approach")
+
+    # Step 1: Find quarter candidates using Hough Circle detection
+    gray = cv2.cvtColor(region_bgr, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (9, 9), 2)
+
+    circles = cv2.HoughCircles(
+        blurred,
+        cv2.HOUGH_GRADIENT,
+        dp=1,
+        minDist=100,
+        param1=50,
+        param2=30,
+        minRadius=50,
+        maxRadius=400
+    )
+
+    if circles is None:
+        logger.warning("No circles detected by Hough Circle Transform")
+        return None
+
+    logger.info(f"Hough Circle detection found {len(circles[0])} candidates")
+
+    # Step 2: Use SAM 2 for precise segmentation of detected circles
+    circles = np.round(circles[0, :]).astype("int")
+
+    # Sort by radius (largest first) - quarters should be among the larger circles
+    circles = sorted(circles, key=lambda c: c[2], reverse=True)
+
+    best_result = None
+
+    for i, circle in enumerate(circles[:5]):  # Try top 5 largest circles
+        x, y, r = circle
+        logger.info(f"  Testing circle {i+1}: center=({x}, {y}), radius={r}")
+
+        # Use single point at circle center for SAM 2 segmentation
+        input_points = np.array([[x, y]], dtype=np.float32)
+        input_labels = np.array([1], dtype=np.int32)
+
+        try:
+            predictor = load_sam2_model("models/sam2_hiera_tiny.pt")
+            with torch.inference_mode():
+                predictor.set_image(region_rgb)
+                masks, scores, logits = predictor.predict(
+                    point_coords=input_points,
+                    point_labels=input_labels,
+                    multimask_output=True
+                )
+
+            if len(masks) == 0:
+                logger.warning(f"  No masks generated for circle at ({x}, {y})")
+                continue
+
+            # Use the highest scoring mask
+            best_mask_idx = np.argmax(scores)
+            mask = masks[best_mask_idx]
+
+            # Calculate mask properties
+            contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            if not contours:
+                logger.warning(f"  No contours found in mask for circle at ({x}, {y})")
+                continue
+
+            # Use the largest contour from the mask
+            largest_contour = max(contours, key=cv2.contourArea)
+            area = cv2.contourArea(largest_contour)
+
+            if area < 500:  # Minimum reasonable area for a quarter
+                logger.warning(f"  Mask area too small ({area}px) for circle at ({x}, {y})")
+                continue
+
+            per = cv2.arcLength(largest_contour, True)
+            if per <= 1:
+                continue
+
+            circularity = 4.0 * np.pi * area / (per * per)
+
+            # Recalculate center and radius from the segmented contour
+            (cx, cy), rr = cv2.minEnclosingCircle(largest_contour)
+            new_r = int(rr)
+
+            # Score based on circularity and size match with original detection
+            size_match = 1.0 - abs(new_r - r) / max(r, new_r)  # How well radius matches
+            combined_score = (circularity * 0.7) + (size_match * 0.3)
+
+            logger.info(f"  Circle at ({x}, {y}): mask_circularity={circularity:.3f}, "
+                       f"size_match={size_match:.3f}, combined_score={combined_score:.3f}, "
+                       f"final_radius={new_r}")
+
+            if best_result is None or combined_score > best_result[0]:
+                best_result = (combined_score, (int(cx), int(cy), new_r))
+
+        except Exception as e:
+            logger.warning(f"SAM 2 segmentation failed for circle at ({x}, {y}): {e}")
+            continue
+
+    if best_result is not None:
+        score, (cx, cy, r) = best_result
+        logger.info(f"Selected best quarter: score={score:.3f}, center=({cx}, {cy}), radius={r}")
+        return (cx, cy, r)
+    else:
+        logger.warning("No suitable quarter candidate found by hybrid approach")
+        return None
+
+
 class CalibrationResult:
     """Container for calibration results and metadata."""
     
@@ -60,250 +191,87 @@ class CalibrationResult:
 def detect_quarter(
     image_path: str,
     search_region_fraction: float = 0.3,
-    min_radius_pixels: int = 100,
-    max_radius_pixels: int = 600
+    expected_tresses: int = 6
 ) -> CalibrationResult:
     """
-    Detect US quarter in top-left region of image using Hough Circle Transform.
-    
-    The quarter is mounted on translucent plastic, which may affect edge detection.
-    We use multiple detection strategies to handle this gracefully.
-    
+    Detect US quarter in top-left region of image using SAM 2 Hiera Tiny.
+
+    Uses optimized SAM 2 parameters specifically tuned for quarter detection.
+
     Args:
         image_path: Path to the image file
         search_region_fraction: Fraction of image to search (0.3 = top-left 30%)
-        min_radius_pixels: Minimum expected quarter radius
-        max_radius_pixels: Maximum expected quarter radius
-    
+        expected_tresses: Expected number of tresses (for compatibility)
+
     Returns:
         CalibrationResult containing calibration factor and detection metadata
-    
+
     Raises:
         ValueError: If quarter cannot be detected reliably
     """
     logger.info(f"Loading image: {image_path}")
-    
+
     # Load image
     image = cv2.imread(image_path)
     if image is None:
         raise ValueError(f"Could not load image: {image_path}")
-    
+
     height, width = image.shape[:2]
     logger.info(f"Image dimensions: {width}x{height} pixels")
-    
-    # Define search region (top-left corner)
-    search_height = int(height * search_region_fraction)
-    search_width = int(width * search_region_fraction)
-    search_region = image[:search_height, :search_width].copy()
-    
-    logger.info(f"Searching for quarter in top-left region: {search_width}x{search_height} pixels")
-    
-    # Try multiple detection strategies
-    circles = _detect_circles_multi_strategy(search_region, min_radius_pixels, max_radius_pixels)
-    
-    if circles is None or len(circles) == 0:
-        raise ValueError(
-            f"Could not detect quarter in top-left region. "
-            f"Tried radius range: {min_radius_pixels}-{max_radius_pixels} pixels. "
-            f"Ensure quarter is visible and well-lit in the top-left corner."
+
+    # Use SAM 2 Hiera Tiny for quarter detection (optimized for this task)
+    roi_h = min(700, height)
+    roi_w = min(700, width)
+    roi = image[:roi_h, :roi_w].copy()
+
+    logger.info("Detecting quarter with SAM 2 Hiera Tiny (optimized for coin detection)...")
+    sam2_coin = _detect_coin_sam2_optimized_quarter(roi, expected_tresses=expected_tresses)
+    if sam2_coin is not None:
+        rx, ry, rr = sam2_coin
+        quarter_area_pixels = np.pi * rr * rr
+        calibration_factor = QUARTER_AREA_CM2 / quarter_area_pixels
+        confidence = _calculate_confidence_simple(roi, rx, ry, rr)
+        logger.info(f"SAM2 Tiny quarter: center=({rx}, {ry}), radius={rr}px (fixed 700x700 ROI)")
+        return CalibrationResult(
+            calibration_factor=calibration_factor,
+            quarter_center=(rx, ry),
+            quarter_radius=rr,
+            quarter_area_pixels=quarter_area_pixels,
+            confidence=confidence,
+            image_shape=image.shape
         )
-    
-    # Select best circle (largest, since quarter should be prominent)
-    best_circle = _select_best_circle(circles, search_region)
-    x, y, radius = best_circle
-    
-    # Calculate calibration
-    quarter_area_pixels = np.pi * radius * radius
-    calibration_factor = QUARTER_AREA_CM2 / quarter_area_pixels
-    
-    # Calculate confidence based on circularity and edge strength
-    confidence = _calculate_confidence(search_region, x, y, radius)
-    
-    logger.info(f"Quarter detected: center=({x}, {y}), radius={radius}px")
-    logger.info(f"Quarter area: {quarter_area_pixels:.2f} pixels")
-    logger.info(f"Calibration factor: {calibration_factor:.6f} cm²/pixel")
-    logger.info(f"Detection confidence: {confidence:.2f}")
-    
-    return CalibrationResult(
-        calibration_factor=calibration_factor,
-        quarter_center=(x, y),
-        quarter_radius=radius,
-        quarter_area_pixels=quarter_area_pixels,
-        confidence=confidence,
-        image_shape=image.shape
+
+    # SAM 2 detection failed
+    raise ValueError(
+        "SAM 2 Hiera Tiny coin detection failed on the fixed 700x700 top-left crop. "
+        "Try brightening or shifting the coin slightly, ensure it is fully within the top-left 700px."
     )
 
 
-def _detect_circles_multi_strategy(
-    region: np.ndarray,
-    min_radius: int,
-    max_radius: int
-) -> Optional[np.ndarray]:
-    """
-    Try multiple Hough Circle detection strategies with different parameters.
-    
-    Strategy 1: Standard detection (good for clean edges)
-    Strategy 2: More sensitive (handles translucent plastic)
-    Strategy 3: Relaxed accumulator threshold (noisy backgrounds)
-    
-    Args:
-        region: Image region to search
-        min_radius: Minimum circle radius
-        max_radius: Maximum circle radius
-    
-    Returns:
-        Detected circles array or None
-    """
-    gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-    
-    # Apply bilateral filter to reduce noise while preserving edges
-    filtered = cv2.bilateralFilter(gray, 9, 75, 75)
-    
-    # Strategy 1: Standard parameters
-    circles = cv2.HoughCircles(
-        filtered,
-        cv2.HOUGH_GRADIENT,
-        dp=1,
-        minDist=100,
-        param1=50,  # Canny upper threshold
-        param2=30,  # Accumulator threshold
-        minRadius=min_radius,
-        maxRadius=max_radius
-    )
-    
-    if circles is not None and len(circles[0]) > 0:
-        logger.info(f"Strategy 1 found {len(circles[0])} circle(s)")
-        return circles[0]
-    
-    # Strategy 2: More sensitive (lower param2)
-    circles = cv2.HoughCircles(
-        filtered,
-        cv2.HOUGH_GRADIENT,
-        dp=1,
-        minDist=100,
-        param1=40,
-        param2=25,
-        minRadius=min_radius,
-        maxRadius=max_radius
-    )
-    
-    if circles is not None and len(circles[0]) > 0:
-        logger.info(f"Strategy 2 found {len(circles[0])} circle(s)")
-        return circles[0]
-    
-    # Strategy 3: Even more relaxed
-    circles = cv2.HoughCircles(
-        filtered,
-        cv2.HOUGH_GRADIENT,
-        dp=1.2,
-        minDist=80,
-        param1=30,
-        param2=20,
-        minRadius=min_radius,
-        maxRadius=max_radius
-    )
-    
-    if circles is not None and len(circles[0]) > 0:
-        logger.info(f"Strategy 3 found {len(circles[0])} circle(s)")
-        return circles[0]
-    
-    logger.warning("All detection strategies failed")
-    return None
-
-
-def _select_best_circle(circles: np.ndarray, region: np.ndarray) -> Tuple[int, int, int]:
-    """
-    Select the most likely quarter from detected circles.
-    
-    Criteria:
-    - Largest radius (quarter should be prominent)
-    - Near top-left but not touching edges
-    - Good circularity
-    
-    Args:
-        circles: Array of detected circles
-        region: Search region image
-    
-    Returns:
-        (x, y, radius) of best circle
-    """
-    height, width = region.shape[:2]
-    
-    scored_circles = []
-    for circle in circles:
-        x, y, radius = circle
-        
-        # Score based on size (larger is better)
-        size_score = radius
-        
-        # Penalize if too close to edges (likely false positive)
-        edge_margin = 50
-        if x < edge_margin or y < edge_margin or x > width - edge_margin or y > height - edge_margin:
-            edge_score = 0.5
-        else:
-            edge_score = 1.0
-        
-        total_score = size_score * edge_score
-        scored_circles.append((total_score, circle))
-    
-    # Return circle with highest score
-    best_score, best_circle = max(scored_circles, key=lambda x: x[0])
-    x, y, radius = best_circle
-    
-    return (int(x), int(y), int(radius))
-
-
-def _calculate_confidence(
+def _calculate_confidence_simple(
     region: np.ndarray,
     x: int,
     y: int,
     radius: int
 ) -> float:
     """
-    Calculate confidence score for detected circle.
-    
-    Higher confidence for:
-    - Strong edges at circle perimeter
-    - Good contrast with background
-    - Metallic color characteristics
-    
+    Simple confidence calculation for SAM 2 detected circle.
+
     Args:
         region: Search region image
         x, y: Circle center
         radius: Circle radius
-    
+
     Returns:
         Confidence score (0-1)
     """
-    gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-    
-    # Sample points on the circle perimeter
-    num_samples = 36
-    angles = np.linspace(0, 2 * np.pi, num_samples)
-    
-    edge_strengths = []
-    for angle in angles:
-        # Sample point on perimeter
-        px = int(x + radius * np.cos(angle))
-        py = int(y + radius * np.sin(angle))
-        
-        # Check bounds
-        if 0 <= px < region.shape[1] and 0 <= py < region.shape[0]:
-            # Calculate gradient strength at this point
-            if px > 0 and px < region.shape[1] - 1 and py > 0 and py < region.shape[0] - 1:
-                gx = float(gray[py, px + 1]) - float(gray[py, px - 1])
-                gy = float(gray[py + 1, px]) - float(gray[py - 1, px])
-                edge_strength = np.sqrt(gx * gx + gy * gy)
-                edge_strengths.append(edge_strength)
-    
-    if len(edge_strengths) == 0:
+    # Basic validation - if we got a reasonable radius, give high confidence
+    if 50 <= radius <= 300:
+        return 0.9
+    elif 30 <= radius <= 400:
+        return 0.7
+    else:
         return 0.5
-    
-    # Average edge strength (normalized to 0-1)
-    avg_edge_strength = np.mean(edge_strengths)
-    confidence = min(avg_edge_strength / 100.0, 1.0)
-    
-    return confidence
 
 
 def create_visualization(

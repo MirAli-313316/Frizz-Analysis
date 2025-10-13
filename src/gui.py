@@ -39,7 +39,9 @@ class FrizzAnalysisGUI:
         """Initialize the GUI application."""
         self.root = ctk.CTk()
         self.root.title("Hair Frizz Analysis Tool")
-        self.root.geometry("1200x800")
+        # Set minimum size - reduced height since layout is more compact
+        self.root.minsize(900, 600)  # Minimum workable size
+        self.root.geometry("1200x800")  # Default size
         
         # Load configuration
         self.config = AppConfig()
@@ -61,13 +63,16 @@ class FrizzAnalysisGUI:
         self._create_left_panel()
         self._create_right_panel()
         self._create_bottom_panel()
+
+        # Bind resize event to ensure proper layout
+        self.root.bind('<Configure>', self._on_window_resize)
         
         logger.info("GUI initialized successfully")
     
     def _create_title(self):
         """Create title bar."""
         title_frame = ctk.CTkFrame(self.root, height=60, corner_radius=0)
-        title_frame.pack(fill="x", padx=0, pady=0)
+        title_frame.pack(fill="x", padx=0, pady=0, side="top")
         title_frame.pack_propagate(False)
         
         title_label = ctk.CTkLabel(
@@ -80,7 +85,8 @@ class FrizzAnalysisGUI:
     def _create_main_container(self):
         """Create main container for left and right panels."""
         self.main_container = ctk.CTkFrame(self.root, corner_radius=0)
-        self.main_container.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        # Fill available space but leave room for bottom panel
+        self.main_container.pack(fill="both", expand=True, padx=10, pady=(0, 0), side="top")
         
         # Configure grid weights
         self.main_container.grid_columnconfigure(0, weight=1, minsize=400)
@@ -139,6 +145,40 @@ class FrizzAnalysisGUI:
         # Separator
         separator = ctk.CTkFrame(left_frame, height=2, fg_color="gray30")
         separator.pack(fill="x", padx=15, pady=10)
+
+        # --- Expected Tresses Section ---
+        tress_section = ctk.CTkFrame(left_frame)
+        tress_section.pack(fill="x", padx=15, pady=(0, 10))
+
+        tress_title = ctk.CTkLabel(
+            tress_section,
+            text="Expected number of tresses (1-10):",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            anchor="w"
+        )
+        tress_title.pack(fill="x", padx=10, pady=(10, 5))
+
+        controls = ctk.CTkFrame(tress_section, fg_color="transparent")
+        controls.pack(fill="x", padx=10, pady=(0, 10))
+
+        self.expected_tresses_var = tk.IntVar(value=self.config.get_expected_tresses())
+        self.tresses_spin = ctk.CTkSlider(
+            controls,
+            from_=1,
+            to=10,
+            number_of_steps=9,
+            command=lambda v: self._on_tresses_change(int(round(v)))
+        )
+        # initialize slider position
+        self.tresses_spin.set(self.expected_tresses_var.get())
+        self.tresses_spin.pack(side="left", fill="x", expand=True)
+
+        self.tresses_label = ctk.CTkLabel(
+            controls,
+            text=f"{self.expected_tresses_var.get()}",
+            width=40
+        )
+        self.tresses_label.pack(side="left", padx=8)
         
         # Button frame
         button_frame = ctk.CTkFrame(left_frame, fg_color="transparent")
@@ -168,34 +208,36 @@ class FrizzAnalysisGUI:
         )
         self.clear_btn.pack(fill="x", pady=5)
         
-        # File count label
+        # File count label - make more compact
         self.file_count_label = ctk.CTkLabel(
             left_frame,
             text="No images selected",
-            font=ctk.CTkFont(size=12)
+            font=ctk.CTkFont(size=10)
         )
-        self.file_count_label.pack(pady=(10, 5))
+        self.file_count_label.pack(pady=(5, 2))
         
-        # Listbox frame with scrollbar
-        list_frame = ctk.CTkFrame(left_frame)
-        list_frame.pack(fill="both", expand=True, padx=15, pady=10)
-        
+        # Listbox frame with scrollbar - make it more compact
+        list_frame = ctk.CTkFrame(left_frame, height=200)  # Fixed height to prevent over-expansion
+        list_frame.pack(fill="x", padx=15, pady=10)
+        list_frame.pack_propagate(False)
+
         # Create scrollable frame for file list
         self.file_list_frame = ctk.CTkScrollableFrame(
             list_frame,
             label_text="Selected Files",
-            label_font=ctk.CTkFont(size=14, weight="bold")
+            label_font=ctk.CTkFont(size=12, weight="bold"),
+            height=180  # Limit height
         )
         self.file_list_frame.pack(fill="both", expand=True)
         
-        # Instructions
+        # Instructions - make more compact
         instructions = ctk.CTkLabel(
             left_frame,
-            text="Select images to process.\nTime points will be auto-detected.",
-            font=ctk.CTkFont(size=11),
+            text="Select images to process. Time points auto-detected.",
+            font=ctk.CTkFont(size=10),
             text_color="gray"
         )
-        instructions.pack(pady=(0, 15))
+        instructions.pack(pady=(0, 5))
     
     def _create_right_panel(self):
         """Create right panel with tabbed interface."""
@@ -318,8 +360,9 @@ class FrizzAnalysisGUI:
     
     def _create_bottom_panel(self):
         """Create bottom panel with process button and progress."""
-        bottom_frame = ctk.CTkFrame(self.root, corner_radius=0, height=120)
-        bottom_frame.pack(fill="x", padx=10, pady=(0, 10))
+        # Use sticky positioning to ensure bottom panel is always visible
+        bottom_frame = ctk.CTkFrame(self.root, corner_radius=0, height=100)
+        bottom_frame.pack(fill="x", padx=10, pady=(5, 10), side="bottom")
         bottom_frame.pack_propagate(False)
         
         # Process button
@@ -347,7 +390,20 @@ class FrizzAnalysisGUI:
             font=ctk.CTkFont(size=12)
         )
         self.status_label.pack(pady=5)
-    
+
+    def _on_window_resize(self, event):
+        """Handle window resize to ensure UI elements remain visible."""
+        if event.widget != self.root:
+            return
+
+        # Ensure minimum height for proper display
+        min_height = 600
+        if self.root.winfo_height() < min_height:
+            self.root.geometry(f"{self.root.winfo_width()}x{min_height}")
+
+        # Force layout update
+        self.root.update_idletasks()
+
     # --- Event Handlers ---
     
     def _browse_output_folder(self):
@@ -546,7 +602,7 @@ class FrizzAnalysisGUI:
                         filepath,
                         visualize=True,
                         output_dir=str(processor.output_dir),
-                        num_expected_tresses=7
+                        num_expected_tresses=self.config.get_expected_tresses()
                     )
                     results.append(result)
                 except Exception as e:
@@ -661,6 +717,14 @@ class FrizzAnalysisGUI:
     def _update_status(self, text: str):
         """Update status label."""
         self.status_label.configure(text=text)
+
+    def _on_tresses_change(self, value: int):
+        """Handle slider change for expected tresses and persist to config."""
+        value = max(1, min(10, int(value)))
+        self.expected_tresses_var.set(value)
+        self.tresses_label.configure(text=f"{value}")
+        # Persist immediately so batch processing uses it
+        self.config.set_expected_tresses(value)
     
     def _display_results(self):
         """Display analysis results in the UI."""

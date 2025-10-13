@@ -1,16 +1,33 @@
 """
 Helper script to download SAM 2 model checkpoint.
 
-Downloads the SAM 2 hiera_large model (~224M parameters, ~900MB) 
-suitable for RTX 3050 Ti (4GB VRAM) with best quality for hair frizz detection.
+Downloads SAM 2 models with support for different sizes:
+- hiera_large: ~224M parameters, ~900MB (best quality)
+- hiera_tiny: ~39M parameters, ~156MB (fastest, lower quality)
 """
 
 import urllib.request
 from pathlib import Path
 import sys
+import argparse
 
-MODEL_URL = "https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt"
-MODEL_NAME = "sam2_hiera_large.pt"
+# Model configurations
+MODELS = {
+    "large": {
+        "url": "https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt",
+        "name": "sam2_hiera_large.pt",
+        "params": "224M",
+        "size": "~900 MB",
+        "description": "Best quality for fine hair frizz detection"
+    },
+    "tiny": {
+        "url": "https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_tiny.pt",
+        "name": "sam2_hiera_tiny.pt",
+        "params": "39M",
+        "size": "~156 MB",
+        "description": "Fastest model, lower quality"
+    }
+}
 
 def download_with_progress(url: str, destination: Path):
     """Download file with progress bar."""
@@ -43,50 +60,54 @@ def download_with_progress(url: str, destination: Path):
 
 def main():
     """Main download function."""
-    
+    parser = argparse.ArgumentParser(description="Download SAM 2 model checkpoint")
+    parser.add_argument("--model", "-m", choices=["large", "tiny"], default="large",
+                       help="Model size to download (default: large)")
+    args = parser.parse_args()
+
+    model_config = MODELS[args.model]
+
     # Create models directory
     models_dir = Path("models")
     models_dir.mkdir(exist_ok=True)
-    
-    model_path = models_dir / MODEL_NAME
-    
+
+    model_path = models_dir / model_config["name"]
+
     # Check if already downloaded
     if model_path.exists():
         size_mb = model_path.stat().st_size / (1024 * 1024)
         print(f"Model already exists: {model_path}")
         print(f"Size: {size_mb:.1f} MB")
-        
-        response = input("\nRe-download? (y/n): ").strip().lower()
+
+        response = input(f"\nRe-download {args.model} model? (y/n): ").strip().lower()
         if response != 'y':
             print("Using existing model.")
             return
-    
+
     print("=" * 70)
     print("SAM 2 Model Download")
     print("=" * 70)
-    print(f"Model: hiera_large (Large)")
-    print(f"Parameters: 224M")
-    print(f"Size: ~900 MB")
-    print(f"Suitable for: RTX 3050 Ti (4GB VRAM)")
-    print(f"Best quality for fine hair frizz detection")
+    print(f"Model: hiera_{args.model} ({args.model.title()})")
+    print(f"Parameters: {model_config['params']}")
+    print(f"Size: {model_config['size']}")
+    print(f"Description: {model_config['description']}")
     print("=" * 70)
     print()
-    
+
     # Download
-    success = download_with_progress(MODEL_URL, model_path)
-    
+    success = download_with_progress(model_config["url"], model_path)
+
     if success:
         size_mb = model_path.stat().st_size / (1024 * 1024)
         print(f"\nModel saved to: {model_path}")
         print(f"Size: {size_mb:.1f} MB")
-        print("\nYou can now run the frizz analysis pipeline")
+        print(f"\nYou can now run the frizz analysis pipeline with {args.model} model")
     else:
         print("\nDownload failed. Please try:")
-        print(f"1. Manually download from: {MODEL_URL}")
+        print(f"1. Manually download from: {model_config['url']}")
         print(f"2. Save to: {model_path}")
-        print("\nAlternative models:")
-        print("  - sam2_hiera_base_plus.pt (~80M params, faster)")
-        print("  - sam2_hiera_small.pt (~46M params, fastest)")
+        print("\nFor help with other models:")
+        print("  python download_sam2_model.py --help")
 
 
 if __name__ == "__main__":

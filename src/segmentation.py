@@ -99,55 +99,68 @@ def get_device() -> str:
 def load_sam2_model(model_checkpoint: Optional[str] = None):
     """
     Load SAM 2 model with caching.
-    
+
     Args:
         model_checkpoint: Path to model checkpoint file
                          Default: models/sam2_hiera_large.pt
-    
+
     Returns:
         SAM2ImagePredictor instance
     """
     global _sam2_predictor
-    
+
     if _sam2_predictor is not None:
         logger.info("Using cached SAM 2 model")
         return _sam2_predictor
-    
+
     try:
         from sam2.sam2_image_predictor import SAM2ImagePredictor
-        
+
         device = get_device()
-        
-        # Determine checkpoint path
+
+        # Determine checkpoint path and config
         if model_checkpoint is None:
             checkpoint_dir = Path("models")
             checkpoint_dir.mkdir(exist_ok=True)
-            
             model_checkpoint = checkpoint_dir / "sam2_hiera_large.pt"
-            
-            if not model_checkpoint.exists():
-                logger.error(f"Model checkpoint not found: {model_checkpoint}")
-                logger.error("Please download the SAM 2 checkpoint:")
-                logger.error(f"  Run: python download_sam2_model.py")
-                logger.error(f"  Or manually download from:")
-                logger.error(f"  https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt")
-                logger.error(f"  Save to: {model_checkpoint}")
-                raise FileNotFoundError(f"SAM 2 checkpoint not found: {model_checkpoint}")
-        
+
+        # Extract model size from filename for config selection
+        checkpoint_name = Path(model_checkpoint).name
+        if "tiny" in checkpoint_name:
+            model_cfg_name = "configs/sam2/sam2_hiera_t"
+            expected_model = "sam2_hiera_tiny.pt"
+        elif "large" in checkpoint_name:
+            model_cfg_name = "configs/sam2/sam2_hiera_l"
+            expected_model = "sam2_hiera_large.pt"
+        else:
+            # Default to large if model name doesn't contain size info
+            model_cfg_name = "configs/sam2/sam2_hiera_l"
+            expected_model = "sam2_hiera_large.pt"
+
+        # Check if the file exists
+        if not Path(model_checkpoint).exists():
+            logger.error(f"Model checkpoint not found: {model_checkpoint}")
+            logger.error(f"Please download the SAM 2 {expected_model} checkpoint:")
+            if "tiny" in checkpoint_name:
+                logger.error("  python download_sam2_model.py --tiny")
+            else:
+                logger.error("  python download_sam2_model.py")
+            logger.error("  Or manually download from:")
+            if "tiny" in checkpoint_name:
+                logger.error("  https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_tiny.pt")
+            else:
+                logger.error("  https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt")
+            logger.error(f"  Save to: {model_checkpoint}")
+            raise FileNotFoundError(f"SAM 2 checkpoint not found: {model_checkpoint}")
+
         logger.info(f"Loading SAM 2 model from {model_checkpoint}")
-        
+        logger.info(f"Using config: {model_cfg_name}")
+
         # Load SAM 2 predictor
         from sam2.build_sam import build_sam2
-        from sam2.sam2_image_predictor import SAM2ImagePredictor
-        
+
         sam2_checkpoint = str(model_checkpoint)
-        
-        # The config name should include the full path from the sam2 package root
-        # Format: "configs/sam2/sam2_hiera_l" (without .yaml extension)
-        model_cfg_name = "configs/sam2/sam2_hiera_l"
-        
-        logger.info(f"Using config: {model_cfg_name}")
-        
+
         # Build the model - hydra will find the config in the sam2 package
         sam2_model = build_sam2(
             model_cfg_name,
@@ -156,12 +169,12 @@ def load_sam2_model(model_checkpoint: Optional[str] = None):
             apply_postprocessing=False
         )
         predictor = SAM2ImagePredictor(sam2_model)
-        
+
         _sam2_predictor = predictor
-        
+
         logger.info("SAM 2 model loaded successfully")
         return predictor
-    
+
     except ImportError as e:
         logger.error("sam2 package not installed")
         logger.error("Install with: pip install git+https://github.com/facebookresearch/segment-anything-2.git")
@@ -201,14 +214,16 @@ def generate_point_prompts(
     # Generate grid points starting from half-spacing to center the grid
     for y in range(spacing_y // 2, height, spacing_y):
         for x in range(spacing_x // 2, width, spacing_x):
-            # Check if this pixel is dark (likely hair)
+            # Place points on a wider range of pixels, not just dark ones
+            # Let SAM 2 determine what's hair vs background
             pixel_value = crop[y, x].mean()
-            if pixel_value < DARK_PIXEL_THRESHOLD:
+            # Accept pixels that are not pure white (background)
+            if pixel_value < 240:  # Much more inclusive threshold
                 points.append([x, y])
     
     # Fallback: if too few points found, use center point
     if len(points) < 5:
-        logger.warning(f"Only {len(points)} dark points found, using center point as fallback")
+        logger.warning(f"Only {len(points)} valid points found, using center point as fallback")
         center_x, center_y = width // 2, height // 2
         points = [[center_x, center_y]]
     
@@ -289,6 +304,18 @@ def segment_single_tress(
             
             # Extract the mask (first and only mask)
             crop_mask = masks[0]  # Shape: (h, w)
+
+            # Debug: Check if mask seems reasonable
+            mask_pixels = np.sum(crop_mask)
+            total_pixels = crop_mask.size
+            mask_ratio = mask_pixels / total_pixels
+            logger.info(f"  Raw mask: {mask_pixels}/{total_pixels} pixels ({mask_ratio:.1%})")
+
+            # If mask covers >80% of the crop, it might be inverted (segmenting background)
+            if mask_ratio > 0.8:
+                logger.warning("  Mask covers >80% of crop - might be inverted, inverting mask")
+                crop_mask = ~crop_mask  # Invert the mask
+
             confidence = float(scores[0])
     
     except Exception as e:
@@ -296,6 +323,7 @@ def segment_single_tress(
         # Return empty mask as fallback
         crop_mask = np.zeros((crop_height, crop_width), dtype=bool)
         confidence = 0.0
+        logger.warning(f"  Using empty fallback mask for tress {tress_id}")
     
     # Scale mask back to original crop size if we resized
     if scale_factor < 1.0:

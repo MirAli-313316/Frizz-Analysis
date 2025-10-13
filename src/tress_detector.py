@@ -20,6 +20,8 @@ BINARY_THRESHOLD = 200  # Hair is dark (<200), background is white (>200)
 MIN_TRESS_AREA = 50000  # Minimum pixels for valid tress (filters noise)
 BBOX_PADDING = 100  # Padding around bounding box to capture frizz
 MORPH_KERNEL_SIZE = 15  # Kernel size for morphological closing
+MAX_ASPECT_RATIO = 8.0  # Filter out extremely wide strips (likely background/frame)
+MAX_EDGE_TOUCH_FRACTION = 0.98  # Filter boxes that cover entire width/height
 
 
 def detect_tress_regions(
@@ -82,18 +84,41 @@ def detect_tress_regions(
     
     logger.info(f"Found {len(contours)} contours")
     
-    # Step 6: Filter contours by minimum area
+    # Step 6: Filter contours by area and shape to avoid full-image/edges
     valid_contours = []
+    img_height, img_width = image.shape[:2]
     for contour in contours:
         area = cv2.contourArea(contour)
-        if area >= MIN_TRESS_AREA:
-            valid_contours.append(contour)
+        if area < MIN_TRESS_AREA:
+            continue
+
+        x, y, w, h = cv2.boundingRect(contour)
+
+        # Reject near-full-image regions (likely background merge)
+        if w >= int(img_width * MAX_EDGE_TOUCH_FRACTION) and h >= int(img_height * 0.3):
+            continue
+        if h >= int(img_height * MAX_EDGE_TOUCH_FRACTION) and w >= int(img_width * 0.3):
+            continue
+
+        # Reject extremely wide/flat regions (frame/background)
+        aspect = max(w / max(1, h), h / max(1, w))
+        if aspect > MAX_ASPECT_RATIO:
+            continue
+
+        # Reject boxes that touch both left and right or both top and bottom edges
+        touches_left = x <= 2
+        touches_right = x + w >= img_width - 2
+        touches_top = y <= 2
+        touches_bottom = y + h >= img_height - 2
+        if (touches_left and touches_right) or (touches_top and touches_bottom):
+            continue
+
+        valid_contours.append(contour)
     
     logger.info(f"Filtered to {len(valid_contours)} valid tresses (area >= {MIN_TRESS_AREA} pixels)")
     
     # Step 7: Get bounding rectangles with padding
     bounding_boxes = []
-    img_height, img_width = image.shape[:2]
     
     for contour in valid_contours:
         x, y, w, h = cv2.boundingRect(contour)

@@ -22,6 +22,7 @@ class AppConfig:
     DEFAULT_CONFIG = {
         'last_output_folder': './outputs',
         'last_input_folder': None,
+        'expected_tresses': 6,
     }
     
     def __init__(self, config_file: str = '.app_config.json'):
@@ -153,4 +154,18 @@ class AppConfig:
             True if successful, False otherwise
         """
         return self.set('last_input_folder', folder)
+
+    # --- Expected tresses (1-10) ---
+    def get_expected_tresses(self) -> int:
+        """Return the saved expected number of tresses (default 6)."""
+        try:
+            val = int(self.get('expected_tresses', 6))
+            return max(1, min(10, val))
+        except Exception:
+            return 7
+
+    def set_expected_tresses(self, value: int) -> bool:
+        """Save expected number of tresses (clamped to 1..10)."""
+        value = max(1, min(10, int(value)))
+        return self.set('expected_tresses', value)
 
