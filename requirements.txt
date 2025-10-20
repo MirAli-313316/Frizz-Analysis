@@ -1,8 +1,8 @@
 # Core Computer Vision
-sam2 @ git+https://github.com/facebookresearch/segment-anything-2.git
 opencv-python>=4.8.0
 torch>=2.0.0
 torchvision>=0.15.0
+transformers>=4.30.0  # For BiRefNet model
 
 # Image Processing
 Pillow>=10.0.0

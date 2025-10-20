@@ -9,7 +9,7 @@ This tool analyzes time-series images of hair tresses in humidity-controlled con
 ## Features
 
 - **Automatic Calibration**: Uses US quarter (24.26mm diameter) for pixel-to-cm² conversion
-- **AI Segmentation**: SAM 2 model for accurate hair tress detection
+- **AI Segmentation**: BiRefNet model for accurate hair tress detection
 - **Time-Series Analysis**: Automatically detects time points from filenames
 - **Surface Area Calculation**: Precise measurements in cm²
 - **Excel Reports**: Multi-sheet reports with percentage changes from baseline
@@ -31,11 +31,6 @@ This tool analyzes time-series images of hair tresses in humidity-controlled con
 2. Install dependencies:
 ```bash
 pip install -r requirements.txt
-```
-
-3. Download SAM model (if not already present):
-```bash
-python download_sam_model.py
 ```
 
 ## Usage
@@ -127,14 +122,13 @@ Frzz Analysis/
 ├── src/
 │   ├── gui.py                 # Modern Tkinter GUI
 │   ├── calibration.py         # Quarter detection
-│   ├── segmentation.py        # SAM 2 hair detection
+│   ├── segmentation.py        # BiRefNet hair detection
 │   ├── analysis.py            # Surface area calculation
 │   ├── batch_processor.py     # Time-series processing
 │   └── time_parser.py         # Filename time detection
 ├── context/                   # Design docs and specifications
 ├── test_images/               # Sample images
 ├── outputs/                   # Generated results
-├── models/                    # SAM model files
 ├── run_gui.py                 # GUI launcher
 └── requirements.txt           # Dependencies
 ```
@@ -148,9 +142,10 @@ Frzz Analysis/
 - Quarter area: 4.621 cm²
 
 ### Segmentation
-- Uses Meta's Segment Anything Model (SAM 2)
+- Uses BiRefNet_lite model for salient object detection
 - GPU acceleration with CUDA (falls back to CPU)
 - Memory-optimized processing (max 1024px dimension)
+- CLAHE preprocessing for enhanced contrast and edge detection
 - Filters out frame edges and background noise
 
 ### Measurement
@@ -172,9 +167,9 @@ Frzz Analysis/
 - Quarter should be unobstructed and clearly visible
 
 ### "Out of memory"
-- Reduce `max_processing_dim` parameter (default: 1024)
 - Close other GPU-intensive applications
 - Use CPU mode (automatic fallback)
+- BiRefNet is more memory efficient than previous models
 
 ### "Wrong time points"
 - Use explicit filename markers (0-hour.jpg, 1-hour.jpg)

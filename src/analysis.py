@@ -13,7 +13,7 @@ import logging
 from dataclasses import dataclass, asdict
 
 from .calibration import detect_quarter
-from .segmentation import segment_all_tresses, load_sam2_model, SegmentationResult, TressMask, visualize_segmentation
+from .segmentation import segment_all_tresses, load_birefnet_model, SegmentationResult, TressMask, visualize_segmentation
 from .tress_detector import detect_tress_regions, visualize_tress_detection
 
 # Configure logging
@@ -88,23 +88,23 @@ def analyze_image(
 ) -> ImageAnalysis:
     """
     Complete analysis of hair tress image: calibration + detection + segmentation + area calculation.
-    
+
     Processing steps:
     1. Detect quarter and calculate calibration factor (cm²/pixel)
     2. Detect tress regions using OpenCV (fast, lightweight)
-    3. Run SAM 2 segmentation on each tress crop at high resolution
+    3. Run BiRefNet segmentation on each tress crop with preprocessing
     4. Calculate surface area for each tress (pixels × calibration_factor)
     5. Optionally generate visualization overlays
-    
+
     Args:
         image_path: Path to image file
         visualize: Whether to generate visualization images
         output_dir: Directory for visualization outputs (default: outputs/)
         num_expected_tresses: Expected number of tresses (for validation warning)
-    
+
     Returns:
         ImageAnalysis object with complete results
-    
+
     Raises:
         ValueError: If quarter not detected or image invalid
         FileNotFoundError: If image file doesn't exist
@@ -169,17 +169,18 @@ def analyze_image(
         logger.error(f"Tress detection failed: {e}")
         raise
     
-    # Step 3: Segment tresses using SAM 2 crop-based processing
-    logger.info("Step 3: Segmenting tresses with SAM 2...")
+    # Step 3: Segment tresses using BiRefNet crop-based processing
+    logger.info("Step 3: Segmenting tresses with BiRefNet...")
     try:
-        # Load SAM 2 model (cached after first call)
-        predictor = load_sam2_model()
-        
+        # Load BiRefNet model (cached after first call)
+        model, transform = load_birefnet_model()
+
         # Segment all tresses
         seg_result = segment_all_tresses(
             image_rgb,
             tress_boxes,
-            predictor=predictor
+            model=model,
+            transform=transform
         )
         
         logger.info(f"✓ Segmented {len(seg_result.tresses)} tresses")
