@@ -34,7 +34,7 @@ _device = None
 # Processing parameters
 MAX_CROP_DIMENSION = 2500  # Crops larger than this get resized to 2048px
 TARGET_LARGE_CROP_SIZE = 2048  # Target size for large crops
-POINTS_PER_SIDE = 48  # Dense grid for point prompts
+POINTS_PER_SIDE = 28  # Ultra sparse to minimize background sampling
 DARK_PIXEL_THRESHOLD = 150  # Pixels darker than this are likely hair
 
 
@@ -217,8 +217,8 @@ def generate_point_prompts(
             # Place points on a wider range of pixels, not just dark ones
             # Let SAM 2 determine what's hair vs background
             pixel_value = crop[y, x].mean()
-            # Accept pixels that are not pure white (background)
-            if pixel_value < 240:  # Much more inclusive threshold
+            # Accept pixels that are not pure white (background) - ultra selective for hair
+            if pixel_value < 245:  # Ultra selective - only very dark pixels
                 points.append([x, y])
     
     # Fallback: if too few points found, use center point
@@ -266,12 +266,16 @@ def segment_single_tress(
     # Extract crop
     crop = image[y:y+h, x:x+w].copy()
     crop_height, crop_width = crop.shape[:2]
-    
+
+    # Very gentle contrast enhancement to improve hair vs background separation
+    crop_float = crop.astype(np.float32)
+    crop_enhanced = np.clip((crop_float - 128) * 1.02 + 128, 0, 255).astype(np.uint8)
+
     logger.info(f"Processing tress {tress_id}: crop size {crop_width}x{crop_height} px")
     
     # Smart resizing: only resize if crop is very large
     scale_factor = 1.0
-    processing_crop = crop
+    processing_crop = crop_enhanced
     
     max_dim = max(crop_height, crop_width)
     if max_dim > MAX_CROP_DIMENSION:
@@ -286,14 +290,14 @@ def segment_single_tress(
     else:
         logger.info(f"  Processing at native resolution (no resize needed)")
 
-        # Generate point prompts on the processing crop
-        input_points, input_labels = generate_point_prompts(processing_crop)
+        # Generate point prompts on the enhanced crop
+        input_points, input_labels = generate_point_prompts(crop_enhanced)
     
     # Run SAM 2 prediction
     try:
         with torch.inference_mode():
-            # Set the image
-            predictor.set_image(processing_crop)
+            # Set the enhanced image
+            predictor.set_image(crop_enhanced)
             
             # Predict mask
             masks, scores, logits = predictor.predict(
@@ -317,6 +321,48 @@ def segment_single_tress(
                 crop_mask = ~crop_mask  # Invert the mask
 
             confidence = float(scores[0])
+
+            # Skip very low confidence masks that might be background noise
+            if confidence < 0.25:  # Slightly higher threshold to ensure quality
+                logger.warning(f"  Low confidence mask ({confidence:.3f}), using empty mask")
+                crop_mask = np.zeros((crop_height, crop_width), dtype=bool)
+            else:
+                # Filter out small isolated regions that are likely background noise
+                import cv2
+                # Remove very small connected components (< 100 pixels) but keep more components
+                num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+                    crop_mask.astype(np.uint8), connectivity=8
+                )
+
+                if num_labels > 1:
+                    # Keep components that are reasonably large (> 300 pixels for substantial hair regions)
+                    component_areas = stats[1:, cv2.CC_STAT_AREA]
+                    keep_indices = np.where(component_areas > 300)[0]  # Components > 300 pixels
+
+                    if len(keep_indices) > 0:
+                        # Create mask with only the kept components
+                        filtered_mask = np.zeros(crop_mask.shape, dtype=bool)
+                        for idx in keep_indices:
+                            label = 1 + idx
+                            filtered_mask = filtered_mask | (labels == label)
+
+                        crop_mask = filtered_mask
+
+                        # Apply morphological closing to reconnect nearby hair regions
+                        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+                        crop_mask = cv2.morphologyEx(crop_mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel).astype(bool)
+
+                        logger.info(f"  Kept {len(keep_indices)} significant components (>300px), filtered {num_labels - 1 - len(keep_indices)} small regions")
+                    else:
+                        # If no components > 300px, keep the largest one
+                        largest_label = 1 + np.argmax(component_areas)
+                        crop_mask = (labels == largest_label)
+
+                        # Apply morphological closing to reconnect nearby hair regions
+                        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+                        crop_mask = cv2.morphologyEx(crop_mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel).astype(bool)
+
+                        logger.info(f"  Kept only largest component, filtered {num_labels - 1} small regions")
     
     except Exception as e:
         logger.error(f"Error during SAM 2 prediction for tress {tress_id}: {e}")
