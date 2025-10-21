@@ -10,7 +10,6 @@ This folder contains test scripts and diagnostic tools for the hair frizz analys
   - Run with: `python tests/test_birefnet_integration.py`
 
 ### Component Tests
-- **`test_birefnet_simple.py`** - Simple BiRefNet functionality test
 - **`test_quarter_detection.py`** - Quarter detection with visual outputs
   - Tests hybrid OpenCV + BiRefNet quarter detection
   - Generates visualization images in `outputs/quarter_test/`

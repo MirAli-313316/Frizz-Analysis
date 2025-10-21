@@ -1,9 +1,3 @@
-# Context and documentation files
-context/
-
-# Output files (includes test outputs)
-outputs/
-
 # BiRefNet downloads from Hugging Face automatically - no need to track models
 *.pth
 *.pt
@@ -57,13 +51,11 @@ dmypy.json
 # Test data (large binary files)
 test_images/
 
-# Note: tests/ folder contains test scripts and IS tracked in git
-# Only test outputs (in outputs/) are gitignored
-
 # AI assistant context
 CLAUDE.md
 
 # User configuration
 .app_config.json
 
-
+context/
+outputs/

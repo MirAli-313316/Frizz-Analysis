@@ -17,6 +17,34 @@ This tool analyzes time-series images of hair tresses in humidity-controlled con
 - **Batch Processing**: Handle 1-10+ tresses across multiple time points
 - **GPU Accelerated**: CUDA support with CPU fallback
 
+## Example
+
+### Input Image
+<img src="docs/examples/input.jpg" width="600" alt="Input: 6 hair tresses with US quarter for calibration">
+
+*Canon 18MP image (5184×3456 pixels) with 6 hair tresses and US quarter in top-left corner*
+
+### Analysis Output
+<img src="docs/examples/output.jpg" width="600" alt="Output: Segmented tresses with surface area measurements">
+
+*Each tress is color-coded and segmented using BiRefNet AI model*
+
+### Measurements
+
+| Tress | Surface Area (cm²) |
+|-------|-------------------|
+| Tress 1 (Red) | 94.37 |
+| Tress 2 (Yellow) | 82.57 |
+| Tress 3 (Green) | 86.94 |
+| Tress 4 (Cyan) | 92.69 |
+| Tress 5 (Blue) | 98.89 |
+| Tress 6 (Magenta) | 92.47 |
+| **Total** | **547.94** |
+
+**Processing Time**: 3.8 seconds (with GPU acceleration)  
+**Calibration**: Hybrid OpenCV + BiRefNet quarter detection  
+**Model**: BiRefNet_lite for precise frizz edge capture
+
 ## Installation
 
 ### Prerequisites
