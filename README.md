@@ -1,6 +1,6 @@
 # Hair Frizz Analysis Tool
 
-A scientific image analysis application for quantitative frizz testing of hair tresses using computer vision and segmentation models.
+A scientific image analysis application for quantitative frizz testing of hair tresses using computer vision and AI segmentation.
 
 ## Overview
 
@@ -8,13 +8,14 @@ This tool analyzes time-series images of hair tresses in humidity-controlled con
 
 ## Features
 
-- **Automatic Calibration**: Uses US quarter (24.26mm diameter) for pixel-to-cm² conversion
-- **AI Segmentation**: BiRefNet model for accurate hair tress detection
+- **Hybrid Quarter Detection**: OpenCV + BiRefNet for accurate calibration
+- **AI Segmentation**: BiRefNet model for precise hair tress detection
 - **Time-Series Analysis**: Automatically detects time points from filenames
 - **Surface Area Calculation**: Precise measurements in cm²
 - **Excel Reports**: Multi-sheet reports with percentage changes from baseline
 - **Modern GUI**: User-friendly interface with real-time progress and visualization
 - **Batch Processing**: Handle 1-10+ tresses across multiple time points
+- **GPU Accelerated**: CUDA support with CPU fallback
 
 ## Installation
 
@@ -32,6 +33,8 @@ This tool analyzes time-series images of hair tresses in humidity-controlled con
 ```bash
 pip install -r requirements.txt
 ```
+
+The BiRefNet model will download automatically from Hugging Face on first use.
 
 ## Usage
 
@@ -87,7 +90,7 @@ print(f"Total area: {result.get_total_area():.2f} cm²")
 
 ### Setup
 - **Background**: White backdrop
-- **Calibration**: US quarter in top-left corner of each image
+- **Calibration**: US quarter (24.26mm diameter) in top-left corner of each image
 - **Camera**: Any JPEG, recommended 12MP+ (tested with Canon 18MP)
 - **Tresses**: 1-10+ tresses per image
 
@@ -104,9 +107,8 @@ print(f"Total area: {result.get_total_area():.2f} cm²")
 ## Output Files
 
 ### Visualizations (outputs/)
-- `analysis_[name].jpg` - Annotated image with tress detection and measurements
-- `calibration_[name].jpg` - Quarter detection visualization
-- `segmentation_[name].jpg` - Segmentation masks
+- `analysis_[name].jpg` - Annotated image with segmentation and measurements
+- `tress_detection_[name].jpg` - Tress region detection visualization
 
 ### Excel Report
 Multi-sheet workbook containing:
@@ -118,46 +120,65 @@ Multi-sheet workbook containing:
 ## Project Structure
 
 ```
-Frzz Analysis/
-├── src/
-│   ├── gui.py                 # Modern Tkinter GUI
-│   ├── calibration.py         # Quarter detection
-│   ├── segmentation.py        # BiRefNet hair detection
-│   ├── analysis.py            # Surface area calculation
-│   ├── batch_processor.py     # Time-series processing
-│   └── time_parser.py         # Filename time detection
-├── context/                   # Design docs and specifications
-├── test_images/               # Sample images
-├── outputs/                   # Generated results
-├── run_gui.py                 # GUI launcher
-└── requirements.txt           # Dependencies
+Frizz Analysis/
+├── src/                      # Core application code
+│   ├── gui.py                # Modern Tkinter GUI
+│   ├── calibration.py        # Hybrid quarter detection
+│   ├── segmentation.py       # BiRefNet segmentation
+│   ├── tress_detector.py     # OpenCV tress detection
+│   ├── analysis.py           # Surface area calculation
+│   ├── batch_processor.py    # Time-series processing
+│   └── time_parser.py        # Filename time detection
+├── tests/                    # Test suite (see tests/README.md)
+│   ├── test_birefnet_integration.py
+│   ├── test_quarter_detection.py
+│   └── diagnose_quarter_hybrid.py
+├── context/                  # Design docs and specifications
+├── test_images/              # Sample images (gitignored)
+├── outputs/                  # Generated results (gitignored)
+├── run_gui.py                # GUI launcher
+└── requirements.txt          # Dependencies
 ```
 
 ## Technical Details
 
-### Calibration
-- Detects quarter using Hough Circle Transform
-- Calculates cm²/pixel ratio per image
+### Quarter Detection (Hybrid Approach)
+**Two-step process for accurate calibration:**
+1. **OpenCV Hough Circle Detection** - Finds quarter location quickly
+2. **BiRefNet Segmentation** - Precisely segments quarter for accurate area measurement
+
+**Key parameters:**
 - US quarter diameter: 24.26mm
 - Quarter area: 4.621 cm²
+- Circularity validation: >0.6 (ensures round object)
+- Uses actual segmented area (not estimated circle area)
 
-### Segmentation
-- Uses BiRefNet_lite model for salient object detection
+### Tress Segmentation
+**OpenCV pre-detection + BiRefNet segmentation:**
+1. **OpenCV** detects individual tress regions via binary thresholding
+2. **BiRefNet** segments each tress crop for precise boundaries
+3. **Filtering** removes noise and reconnects fragmented regions
+
+**BiRefNet configuration:**
+- Model: BiRefNet_lite (Hugging Face: ZhengPeng7/BiRefNet_lite)
+- Input size: 1024x1024 (automatic resizing)
+- Threshold: 0.35 (captures fine frizzy edges)
+- CLAHE preprocessing for enhanced contrast
 - GPU acceleration with CUDA (falls back to CPU)
-- Memory-optimized processing (max 1024px dimension)
-- CLAHE preprocessing for enhanced contrast and edge detection
-- Filters out frame edges and background noise
 
 ### Measurement
 - Surface area = pixel_count × calibration_factor
+- Each image calibrated individually (accounts for camera movement)
 - Baseline tracking from 0-hour images
-- Percentage change calculation: ((current - baseline) / baseline) × 100
+- Percentage change: ((current - baseline) / baseline) × 100
 
 ## Hardware
 
 **Tested Configuration:**
 - GPU: NVIDIA GeForce RTX 3050 Ti (4GB VRAM)
 - Automatic CUDA detection with CPU fallback
+- ~0.17 GB VRAM for model
+- ~3-4 seconds per 6-tress image with GPU
 
 ## Troubleshooting
 
@@ -165,25 +186,49 @@ Frzz Analysis/
 - Ensure quarter is visible in top-left corner
 - Check that background is white/light colored
 - Quarter should be unobstructed and clearly visible
+- Run diagnostic: `python tests/diagnose_quarter_hybrid.py [image]`
 
 ### "Out of memory"
 - Close other GPU-intensive applications
 - Use CPU mode (automatic fallback)
-- BiRefNet is more memory efficient than previous models
+- BiRefNet uses ~0.17 GB VRAM (very efficient)
 
 ### "Wrong time points"
 - Use explicit filename markers (0-hour.jpg, 1-hour.jpg)
 - Verify files are sorted correctly
 - Check filename patterns match expected format
 
-## Development
+### "Missing dependencies"
+- Install requirements: `pip install -r requirements.txt`
+- BiRefNet downloads automatically from Hugging Face
+- Ensure `transformers` library installed
 
-Run tests:
+## Development & Testing
+
+### Run Tests
 ```bash
-python test_calibration.py
-python test_segmentation.py
-python test_full_pipeline.py
+# Full integration test
+python tests/test_birefnet_integration.py
+
+# Quarter detection with visualizations
+python tests/test_quarter_detection.py
+
+# Detailed diagnostic with step-by-step analysis
+python tests/diagnose_quarter_hybrid.py [image_path]
 ```
+
+See `tests/README.md` for detailed test documentation.
+
+### Add New Tests
+Place test scripts in `tests/` folder with `test_*.py` or `diagnose_*.py` prefix.
+
+## Model Information
+
+### BiRefNet
+- **Source**: Hugging Face (ZhengPeng7/BiRefNet_lite)
+- **Purpose**: Salient object detection with fine edge detail
+- **License**: Check Hugging Face model card
+- **First Run**: Model downloads automatically (~100 MB)
 
 ## License
 
@@ -191,6 +236,8 @@ This is a scientific research tool. Please cite appropriately if used in publica
 
 ## Support
 
-For issues or questions, refer to the `context/` directory for detailed specifications and design decisions.
-
-
+For detailed technical information:
+- `context/project_spec.md` - Complete specifications
+- `context/design_decisions.md` - Architecture choices
+- `context/known_issues.md` - Resolved issues and solutions
+- `tests/README.md` - Test suite documentation

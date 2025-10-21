@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Dict
 import logging
 from dataclasses import dataclass
+from PIL import Image
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -33,151 +34,137 @@ class CalibrationResult:
     image_shape: Tuple[int, int, int]
 
 
-def _detect_quarter_hybrid_birefnet(region_bgr: np.ndarray) -> Optional[Tuple[int, int, int]]:
+def _detect_quarter_hybrid_birefnet(region_bgr: np.ndarray) -> Optional[Tuple[int, int, int, float]]:
     """
-    Detect US quarter using hybrid approach: OpenCV Hough circles + BiRefNet segmentation.
-
-    This approach leverages the strengths of both methods:
-    1. OpenCV Hough Circle detection reliably finds circular objects
-    2. BiRefNet provides precise segmentation boundaries for accurate area calculation
-
+    Detect US quarter using hybrid OpenCV + BiRefNet approach.
+    
+    Simple and effective two-step process:
+    1. OpenCV Hough Circle Detection finds the quarter location
+    2. BiRefNet segments the quarter precisely for accurate area measurement
+    
     Args:
-        region_bgr: BGR image region (top-left 700x700 crop)
-
+        region_bgr: BGR image region (top-left area of full image)
+    
     Returns:
-        (x, y, radius) of detected quarter, or None if not found
+        (x, y, radius, actual_area_pixels) of detected quarter, or None if not found
     """
     from .segmentation import load_birefnet_model
-    from PIL import Image
-    import torchvision.transforms as transforms
-
+    
     # Load BiRefNet model (cached)
     model, transform = load_birefnet_model()
-
+    
     height, width = region_bgr.shape[:2]
     logger.info(f"Quarter detection ROI: {width}x{height} pixels")
-
-    # Step 1: Use OpenCV to find quarter candidates
+    
+    # STEP 1: OpenCV Hough Circle Detection
+    # Find the largest circular object (likely the quarter)
     gray = cv2.cvtColor(region_bgr, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (9, 9), 2)
-
-    # Hough circle detection with more permissive parameters for quarters
+    
     circles = cv2.HoughCircles(
         blurred,
         cv2.HOUGH_GRADIENT,
-        dp=1.0,
-        minDist=30,  # Reduced minimum distance
-        param1=40,   # Lower threshold for edge detection
-        param2=20,   # Lower threshold for circle detection
-        minRadius=50,  # Lower minimum radius
-        maxRadius=200  # Higher maximum radius
+        dp=1,
+        minDist=100,
+        param1=50,
+        param2=30,
+        minRadius=50,
+        maxRadius=400
     )
-
-    logger.info(f"Hough circles found: {len(circles[0]) if circles is not None else 0}")
-
+    
     if circles is None:
         logger.warning("No circles detected by Hough transform")
         return None
+    
+    # Get the largest circle
+    circles = np.round(circles[0, :]).astype("int")
+    largest_circle = max(circles, key=lambda c: c[2])  # Sort by radius
+    x, y, r = largest_circle
+    
+    logger.info(f"OpenCV detected circle: center=({x}, {y}), radius={r}px")
+    
+    # STEP 2: BiRefNet Segmentation
+    # Crop a focused region around the detected quarter
+    crop_size = int(r * 3)  # 3x radius for context
+    crop_x1 = max(0, x - crop_size // 2)
+    crop_y1 = max(0, y - crop_size // 2)
+    crop_x2 = min(width, x + crop_size // 2)
+    crop_y2 = min(height, y + crop_size // 2)
+    
+    quarter_crop = region_bgr[crop_y1:crop_y2, crop_x1:crop_x2]
+    
+    # Convert to RGB for BiRefNet
+    quarter_crop_rgb = cv2.cvtColor(quarter_crop, cv2.COLOR_BGR2RGB)
+    pil_image = Image.fromarray(quarter_crop_rgb)
+    
+    logger.info("Running BiRefNet segmentation on quarter...")
+    
+    try:
+        # Transform and run BiRefNet
+        input_tensor = transform(pil_image).unsqueeze(0).cuda()
+        
+        with torch.no_grad():
+            result = model(input_tensor)
+            
+            if isinstance(result, list) and len(result) > 0:
+                mask = result[0]
+            else:
+                mask = result
+            
+            if isinstance(mask, torch.Tensor):
+                mask = mask.squeeze().cpu().numpy()
+            
+            # Apply sigmoid
+            mask = 1 / (1 + np.exp(-mask))
+            
+            # Resize mask to crop size
+            crop_h, crop_w = quarter_crop.shape[:2]
+            if mask.shape != (crop_h, crop_w):
+                mask = cv2.resize(mask, (crop_w, crop_h), interpolation=cv2.INTER_LINEAR)
+            
+            # Apply threshold for binary mask (higher threshold for cleaner quarter detection)
+            mask_binary = (mask > 0.5).astype(np.uint8) * 255
+            
+            # Find contours
+            contours, _ = cv2.findContours(mask_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if not contours:
+                logger.warning("BiRefNet found no contours")
+                return None
+            
+            # Find largest contour (should be the quarter)
+            largest_contour = max(contours, key=cv2.contourArea)
+            actual_area = cv2.contourArea(largest_contour)
+            
+            # Validate circularity (quarters should be reasonably circular)
+            perimeter = cv2.arcLength(largest_contour, True)
+            if perimeter > 0:
+                circularity = 4 * np.pi * actual_area / (perimeter * perimeter)
+            else:
+                circularity = 0
+            
+            logger.info(f"BiRefNet segmentation: area={actual_area:.0f}px, circularity={circularity:.3f}")
+            
+            if circularity < 0.6:
+                logger.warning(f"Object not circular enough (circularity={circularity:.3f})")
+                # Fall back to Hough circle estimate
+                actual_area = np.pi * r * r
+            
+            # Calculate refined radius from actual area
+            refined_radius = np.sqrt(actual_area / np.pi)
+            
+            logger.info(f"✓ Quarter detected: radius={refined_radius:.1f}px, area={actual_area:.0f}px")
+            
+            return (x, y, int(refined_radius), actual_area)
+            
+    except Exception as e:
+        logger.error(f"BiRefNet segmentation failed: {e}")
+        # Fall back to Hough circle estimate
+        actual_area = np.pi * r * r
+        logger.warning(f"Using Hough circle estimate: area={actual_area:.0f}px")
+        return (x, y, r, actual_area)
 
-    # Convert to list and sort by radius (largest first)
-    circles_list = circles[0].tolist()
-    circles_list.sort(key=lambda c: c[2], reverse=True)
 
-    # Filter circles by size and position (more permissive for quarter detection)
-    valid_circles = []
-    for circle in circles_list:
-        x, y, r = circle
-
-        # Filter by size (quarter should be 50-200 pixels radius)
-        if 50 <= r <= 200:
-            # Filter by position (not too close to edges)
-            margin = 30  # Reduced margin
-            if margin < x < width - margin and margin < y < height - margin:
-                valid_circles.append((x, y, r))
-
-    logger.info(f"Valid circles after filtering: {len(valid_circles)}")
-
-    if not valid_circles:
-        logger.warning("No valid circles after size/position filtering")
-        return None
-
-    # Step 2: Use BiRefNet for precise segmentation of the best circle candidate
-    best_result = None
-
-    for i, circle in enumerate(valid_circles[:3]):  # Try top 3 largest valid circles
-        x, y, r = circle
-        logger.info(f"  Testing circle {i+1}: center=({x}, {y}), radius={r}")
-
-        try:
-            # Convert BGR to RGB for BiRefNet
-            region_rgb = cv2.cvtColor(region_bgr, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(region_rgb)
-
-            # Transform image for BiRefNet
-            input_tensor = transform(pil_image).unsqueeze(0).cuda()
-
-            # Run BiRefNet inference
-            with torch.no_grad():
-                result = model(input_tensor)
-
-                # BiRefNet returns a list with one tensor
-                if isinstance(result, list) and len(result) > 0:
-                    mask = result[0]
-                else:
-                    mask = result
-
-                # Convert to numpy array
-                if isinstance(mask, torch.Tensor):
-                    mask = mask.squeeze().cpu().numpy()
-
-                # Apply sigmoid to get probabilities
-                mask = 1 / (1 + np.exp(-mask))
-
-                # Resize mask to match original image size if needed
-                if mask.shape != (height, width):
-                    mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_LINEAR)
-
-                # Apply threshold for binary mask (lower threshold for quarter edges)
-                mask_binary = (mask > 0.3).astype(np.uint8) * 255
-
-                # Calculate mask properties
-                contours, _ = cv2.findContours(mask_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-                if not contours:
-                    logger.warning(f"  No contours found in BiRefNet mask for circle at ({x}, {y})")
-                    continue
-
-                # Use the largest contour from the mask
-                largest_contour = max(contours, key=cv2.contourArea)
-                area = cv2.contourArea(largest_contour)
-
-                if area < 300:  # Minimum reasonable area for a quarter (lowered threshold)
-                    logger.warning(f"  BiRefNet mask area too small ({area}px) for circle at ({x}, {y})")
-                    continue
-
-                # Calculate circularity (how close to perfect circle)
-                perimeter = cv2.arcLength(largest_contour, True)
-                circularity = 4 * np.pi * area / (perimeter * perimeter) if perimeter > 0 else 0
-
-                logger.info(f"  Circle {i+1}: area={area:.0f}px, circularity={circularity:.3f}")
-
-                # Accept if circularity is reasonable (>0.4) and area is reasonable (relaxed criteria for quarters)
-                if circularity > 0.4 and 1000 < area < 100000:
-                    # Calculate actual radius from area (more accurate than Hough)
-                    actual_radius = np.sqrt(area / np.pi)
-                    best_result = (x, y, int(actual_radius))
-                    logger.info(f"  ✓ Accepted circle {i+1} with BiRefNet refined radius {actual_radius:.1f}px")
-                    break
-
-        except Exception as e:
-            logger.error(f"  BiRefNet prediction failed for circle {i+1}: {e}")
-            continue
-
-    if best_result is None:
-        logger.warning("No suitable quarter found after BiRefNet refinement")
-        return None
-
-    return best_result
 
 
 def detect_quarter(
@@ -219,6 +206,9 @@ def detect_quarter(
         (0, 0, min(700, width), min(700, height)),  # Top-left
         (0, 0, min(1000, width), min(1000, height)),  # Larger top-left
         (0, 0, width, min(700, height)),  # Top strip
+        (0, 0, min(800, width), min(800, height)),  # Medium top-left
+        (50, 50, min(600, width-100), min(600, height-100)),  # Slightly offset
+        (0, 0, min(1200, width), min(800, height)),  # Even larger region
     ]
 
     quarter_result = None
@@ -230,21 +220,27 @@ def detect_quarter(
         coin_result = _detect_quarter_hybrid_birefnet(roi)
 
         if coin_result is not None:
+            # Unpack result: (x, y, radius, actual_area_pixels)
+            rx, ry, rr, actual_area = coin_result
+            
             # Adjust coordinates back to full image
-            rx, ry, rr = coin_result
             full_rx, full_ry = x + rx, y + ry
 
-            quarter_area_pixels = np.pi * rr * rr
-            calibration_factor = QUARTER_AREA_CM2 / quarter_area_pixels
+            # Use actual segmented area for calibration
+            calibration_factor = QUARTER_AREA_CM2 / actual_area
             confidence = _calculate_confidence_simple(roi, int(rx), int(ry), int(rr))
 
-            logger.info(f"Quarter found in region {i+1}: center=({full_rx}, {full_ry}), radius={rr}px")
+            logger.info(f"✓ Quarter found in region {i+1}:")
+            logger.info(f"  Center: ({full_rx}, {full_ry})")
+            logger.info(f"  Radius: {rr}px")
+            logger.info(f"  Segmented area: {actual_area:.0f}px²")
+            logger.info(f"  Calibration factor: {calibration_factor:.6f} cm²/px")
 
             quarter_result = CalibrationResult(
                 calibration_factor=calibration_factor,
                 quarter_center=(int(full_rx), int(full_ry)),
                 quarter_radius=int(rr),
-                quarter_area_pixels=quarter_area_pixels,
+                quarter_area_pixels=actual_area,
                 confidence=confidence,
                 image_shape=image.shape
             )
@@ -252,7 +248,13 @@ def detect_quarter(
 
     if quarter_result is None:
         # For testing purposes, return a default calibration if no quarter found
-        logger.warning("No quarter detected, using default calibration for testing")
+        logger.warning("No quarter detected in any search region, using default calibration for testing")
+        logger.warning("This might indicate:")
+        logger.warning("  - Quarter is not in the expected top-left position")
+        logger.warning("  - Quarter is obscured or not clearly visible")
+        logger.warning("  - Lighting/contrast issues affecting detection")
+        logger.warning("  - Quarter size is outside expected range")
+
         # Assume ~100 pixels per cm (typical for 18MP images)
         calibration_factor = QUARTER_AREA_CM2 / (100 * 100)  # 100px diameter = 4.62 cm²
 

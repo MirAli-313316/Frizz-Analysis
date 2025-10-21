@@ -39,7 +39,7 @@ def test_model_loading():
 
     try:
         model, transform = load_birefnet_model()
-        print("✓ BiRefNet model loaded successfully")
+        print("SUCCESS: BiRefNet model loaded successfully")
         print(f"   Model type: {type(model).__name__}")
         print(f"   Transform type: {type(transform).__name__}")
 
@@ -48,13 +48,13 @@ def test_model_loading():
         model2, transform2 = load_birefnet_model()
         cache_time = time.time() - start_time
 
-        print(f"✓ Model caching works (loaded in {cache_time:.4f}s)")
+        print(f"SUCCESS: Model caching works (loaded in {cache_time:.4f}s)")
         print(f"   Same objects returned: {model is model2 and transform is transform2}")
 
         return True
 
     except Exception as e:
-        print(f"❌ Model loading failed: {e}")
+        print(f"FAILED: Model loading failed: {e}")
         print(f"   Traceback: {traceback.format_exc()}")
         return False
 
@@ -69,18 +69,18 @@ def test_tress_detection(image_path: str):
         # Load image
         image = cv2.imread(image_path)
         if image is None:
-            print(f"❌ Could not load image: {image_path}")
+            print(f"FAILED: Could not load image: {image_path}")
             return False
 
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        print(f"✅ Image loaded: {image.shape[1]}x{image.shape[0]} pixels")
+        print(f"SUCCESS: Image loaded: {image.shape[1]}x{image.shape[0]} pixels")
 
         # Detect tresses
         start_time = time.time()
         tress_boxes = detect_tress_regions(image_rgb, num_expected_tresses=7)
         detection_time = time.time() - start_time
 
-        print(f"✅ Tress detection completed in {detection_time:.2f}s")
+        print(f"SUCCESS: Tress detection completed in {detection_time:.2f}s")
         print(f"   Found {len(tress_boxes)} tress regions")
 
         if tress_boxes:
@@ -97,7 +97,7 @@ def test_tress_detection(image_path: str):
         return len(tress_boxes) > 0
 
     except Exception as e:
-        print(f"❌ Tress detection failed: {e}")
+        print(f"FAILED: Tress detection failed: {e}")
         print(f"   Traceback: {traceback.format_exc()}")
         return False
 
@@ -112,17 +112,17 @@ def test_segmentation(image_path: str, max_tresses: int = 3):
         # Load image and detect tresses
         image = cv2.imread(image_path)
         if image is None:
-            print(f"❌ Could not load image: {image_path}")
+            print(f"FAILED: Could not load image: {image_path}")
             return False
 
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         tress_boxes = detect_tress_regions(image_rgb, num_expected_tresses=7)
 
         if not tress_boxes:
-            print("❌ No tresses detected for segmentation testing")
+            print("FAILED: No tresses detected for segmentation testing")
             return False
 
-        print(f"✅ Found {len(tress_boxes)} tresses for segmentation")
+        print(f"SUCCESS: Found {len(tress_boxes)} tresses for segmentation")
         print(f"   Testing segmentation on first {min(max_tresses, len(tress_boxes))} tresses")
 
         # Load BiRefNet model
@@ -135,7 +135,7 @@ def test_segmentation(image_path: str, max_tresses: int = 3):
         seg_result = segment_all_tresses(image_rgb, test_boxes, model, transform)
         segmentation_time = time.time() - start_time
 
-        print(f"✅ Segmentation completed in {segmentation_time:.2f}s")
+        print(f"SUCCESS: Segmentation completed in {segmentation_time:.2f}s")
         print(f"   Processed {len(seg_result.tresses)} tresses")
         print(f"   Average time per tress: {segmentation_time/len(seg_result.tresses):.2f}s")
 
@@ -150,7 +150,7 @@ def test_segmentation(image_path: str, max_tresses: int = 3):
         return True
 
     except Exception as e:
-        print(f"❌ Segmentation test failed: {e}")
+        print(f"FAILED: Segmentation test failed: {e}")
         print(f"   Traceback: {traceback.format_exc()}")
         return False
 
@@ -174,7 +174,7 @@ def test_full_pipeline(image_path: str):
 
         total_time = time.time() - start_time
 
-        print(f"✅ Complete analysis completed in {total_time:.2f}s")
+        print(f"SUCCESS: Complete analysis completed in {total_time:.2f}s")
         print(f"   Total surface area: {result.get_total_area():.2f} cm²")
         print(f"   Number of tresses: {len(result.tresses)}")
         print(f"   Calibration factor: {result.calibration_factor:.6f} cm²/pixel")
@@ -197,7 +197,7 @@ def test_full_pipeline(image_path: str):
         return True
 
     except Exception as e:
-        print(f"❌ Complete pipeline test failed: {e}")
+        print(f"FAILED: Complete pipeline test failed: {e}")
         print(f"   Traceback: {traceback.format_exc()}")
         return False
 
@@ -212,7 +212,7 @@ def test_visualization(image_path: str):
         # Load image and get segmentation results
         image = cv2.imread(image_path)
         if image is None:
-            print(f"❌ Could not load image: {image_path}")
+            print(f"FAILED: Could not load image: {image_path}")
             return False
 
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -223,7 +223,7 @@ def test_visualization(image_path: str):
         seg_result = segment_all_tresses(image_rgb, tress_boxes, model, transform)
 
         # Generate visualization
-        from segmentation import visualize_segmentation
+        from src.segmentation import visualize_segmentation
         viz_image = visualize_segmentation(image_rgb, seg_result)
 
         # Save visualization
@@ -231,15 +231,15 @@ def test_visualization(image_path: str):
         success = cv2.imwrite(output_path, cv2.cvtColor(viz_image, cv2.COLOR_RGB2BGR))
 
         if success:
-            print(f"✅ Visualization saved to: {output_path}")
+            print(f"SUCCESS: Visualization saved to: {output_path}")
             print(f"   Image size: {viz_image.shape[1]}x{viz_image.shape[0]} pixels")
             return True
         else:
-            print("❌ Failed to save visualization")
+            print("FAILED: Failed to save visualization")
             return False
 
     except Exception as e:
-        print(f"❌ Visualization test failed: {e}")
+        print(f"FAILED: Visualization test failed: {e}")
         print(f"   Traceback: {traceback.format_exc()}")
         return False
 
@@ -274,12 +274,12 @@ def main():
 
     results = []
     for test_name, test_func in tests:
-        print(f"\n🧪 Running: {test_name}")
+        print(f"\nRunning: {test_name}")
         try:
             result = test_func()
             results.append((test_name, result))
         except Exception as e:
-            print(f"❌ {test_name} crashed: {e}")
+            print(f"FAILED: {test_name} crashed: {e}")
             results.append((test_name, False))
 
     # Summary
@@ -291,17 +291,17 @@ def main():
     total = len(results)
 
     for test_name, result in results:
-        status = "✅ PASSED" if result else "❌ FAILED"
+        status = "PASSED" if result else "FAILED"
         print(f"{status}: {test_name}")
 
     print(f"\nOverall: {passed}/{total} tests passed")
 
     if passed == total:
-        print("\n🎉 All tests passed! BiRefNet integration is working correctly.")
+        print("\nAll tests passed! BiRefNet integration is working correctly.")
         print("   You can now run the full application with: python run_gui.py")
         return 0
     else:
-        print(f"\n⚠️  {total - passed} test(s) failed. Check the output above for details.")
+        print(f"\nWARNING: {total - passed} test(s) failed. Check the output above for details.")
         return 1
 
 
