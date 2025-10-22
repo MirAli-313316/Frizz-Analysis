@@ -24,6 +24,7 @@ ENV/
 *.swo
 *~
 .DS_Store
+.cursorignore
 
 # Distribution / packaging
 build/
