@@ -42,7 +42,18 @@ class FrizzAnalysisGUI:
         # Set minimum size - reduced height since layout is more compact
         self.root.minsize(900, 600)  # Minimum workable size
         self.root.geometry("1200x800")  # Default size
-        
+
+        # Set window icon
+        try:
+            # Try different icon formats based on platform
+            if os.name == 'nt':  # Windows
+                self.root.iconbitmap('icons/app_icon.ico')
+            else:  # macOS/Linux
+                icon_img = tk.PhotoImage(file='icons/app_icon.png')
+                self.root.iconphoto(True, icon_img)
+        except Exception as e:
+            logger.warning(f"Could not load application icon: {e}")
+
         # Load configuration
         self.config = AppConfig()
         

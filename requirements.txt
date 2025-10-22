@@ -17,7 +17,6 @@ xlsxwriter>=3.1.0  # Better Excel formatting
 pydantic>=2.0.0
 
 # GUI
-tkinter  # Usually comes with Python
 customtkinter>=5.0.0  # Modern looking Tkinter
 
 # Visualization
@@ -28,3 +27,6 @@ seaborn>=0.12.0
 python-dotenv>=1.0.0
 tqdm>=4.65.0  # Progress bars
 natsort>=8.0.0  # Natural sorting for filenames
+
+# Build tools (for desktop app packaging)
+pyinstaller>=5.0.0

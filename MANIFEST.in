@@ -1,0 +1,5 @@
+include icons/*.ico
+include icons/*.icns
+include icons/*.png
+include context/*
+recursive-include context *.md

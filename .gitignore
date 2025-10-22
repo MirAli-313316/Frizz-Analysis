@@ -60,3 +60,27 @@ CLAUDE.md
 
 context/
 outputs/
+
+# Build outputs
+dist/
+build/
+*.spec
+__pycache__/
+*.pyc
+*.pyo
+
+# PyInstaller
+*.manifest
+*.exe
+*.app/
+
+# Setuptools
+*.egg-info/
+.eggs/
+
+# IDE (additional)
+*.swp
+*.swo
+*~
+.DS_Store
+.cursorignore
