@@ -12,9 +12,9 @@ from typing import Dict, List, Optional, Tuple
 import logging
 from dataclasses import dataclass, asdict
 
-from .calibration import detect_quarter
-from .segmentation import segment_all_tresses, load_birefnet_model, SegmentationResult, TressMask, visualize_segmentation
-from .tress_detector import detect_tress_regions, visualize_tress_detection
+from src.calibration import detect_quarter
+from src.segmentation import segment_all_tresses, load_birefnet_model, SegmentationResult, TressMask, visualize_segmentation
+from src.tress_detector import detect_tress_regions, visualize_tress_detection
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

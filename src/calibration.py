@@ -48,7 +48,7 @@ def _detect_quarter_hybrid_birefnet(region_bgr: np.ndarray) -> Optional[Tuple[in
     Returns:
         (x, y, radius, actual_area_pixels) of detected quarter, or None if not found
     """
-    from .segmentation import load_birefnet_model
+    from src.segmentation import load_birefnet_model
     
     # Load BiRefNet model (cached)
     model, transform = load_birefnet_model()

@@ -17,11 +17,12 @@ import sys
 from PIL import Image, ImageTk
 import pandas as pd
 import traceback
+from datetime import datetime
 
-from .batch_processor import BatchProcessor
-from .time_parser import TimePointParser
-from .analysis import ImageAnalysis
-from .config import AppConfig
+from src.batch_processor import BatchProcessor
+from src.time_parser import TimePointParser
+from src.analysis import ImageAnalysis
+from src.config import AppConfig
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -65,6 +66,9 @@ class FrizzAnalysisGUI:
         self.summary_df: Optional[pd.DataFrame] = None
         self.output_folder_path: Optional[Path] = None  # Full path including timestamp
         
+        # Error logging
+        self.error_log_path: Optional[Path] = None
+        
         # Processing state
         self.processing = False
         
@@ -77,6 +81,9 @@ class FrizzAnalysisGUI:
 
         # Bind resize event to ensure proper layout
         self.root.bind('<Configure>', self._on_window_resize)
+        
+        # Setup error logging
+        self._setup_error_logging()
         
         logger.info("GUI initialized successfully")
     
@@ -402,6 +409,49 @@ class FrizzAnalysisGUI:
         )
         self.status_label.pack(pady=5)
 
+    def _setup_error_logging(self):
+        """Setup error logging to file."""
+        try:
+            # Create logs directory
+            logs_dir = Path("logs")
+            logs_dir.mkdir(exist_ok=True)
+            
+            # Create timestamped log file
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            self.error_log_path = logs_dir / f"error_log_{timestamp}.txt"
+            
+            # Setup file handler for detailed logging
+            file_handler = logging.FileHandler(self.error_log_path)
+            file_handler.setLevel(logging.ERROR)
+            file_formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )
+            file_handler.setFormatter(file_formatter)
+            
+            # Add to root logger
+            root_logger = logging.getLogger()
+            root_logger.addHandler(file_handler)
+            
+            logger.info(f"Error logging setup: {self.error_log_path}")
+            
+        except Exception as e:
+            logger.warning(f"Could not setup error logging: {e}")
+
+    def _log_error_to_file(self, error_msg: str, traceback_str: str = ""):
+        """Log error details to file."""
+        if self.error_log_path:
+            try:
+                with open(self.error_log_path, 'a', encoding='utf-8') as f:
+                    f.write(f"\n{'='*80}\n")
+                    f.write(f"ERROR: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"{'='*80}\n")
+                    f.write(f"Error: {error_msg}\n")
+                    if traceback_str:
+                        f.write(f"\nTraceback:\n{traceback_str}\n")
+                    f.write(f"{'='*80}\n")
+            except Exception as e:
+                logger.warning(f"Could not write to error log: {e}")
+
     def _on_window_resize(self, event):
         """Handle window resize to ensure UI elements remain visible."""
         if event.widget != self.root:
@@ -467,17 +517,30 @@ class FrizzAnalysisGUI:
         )
         
         if files:
-            self.selected_files = list(files)
+            # Convert to absolute paths and validate they exist
+            valid_files = []
+            for file_path in files:
+                abs_path = Path(file_path).resolve()
+                if abs_path.exists():
+                    valid_files.append(str(abs_path))
+                else:
+                    logger.warning(f"Selected file does not exist: {abs_path}")
+                    messagebox.showwarning("File Not Found", f"File not found:\n{abs_path}")
             
-            # Save the directory of first file as last input folder
-            if files:
-                first_file_dir = str(Path(files[0]).parent)
-                self.config.set_last_input_folder(first_file_dir)
-            
-            self._update_file_list()
-            self.process_btn.configure(state="normal")
-            self._update_status(f"Selected {len(files)} images")
-            logger.info(f"Selected {len(files)} images")
+            if valid_files:
+                self.selected_files = valid_files
+                
+                # Save the directory of first file as last input folder
+                if valid_files:
+                    first_file_dir = str(Path(valid_files[0]).parent)
+                    self.config.set_last_input_folder(first_file_dir)
+                
+                self._update_file_list()
+                self.process_btn.configure(state="normal")
+                self._update_status(f"Selected {len(valid_files)} images")
+                logger.info(f"Selected {len(valid_files)} images")
+            else:
+                messagebox.showwarning("No Valid Files", "No valid image files were selected.")
     
     def _clear_selection(self):
         """Clear selected files."""
@@ -608,7 +671,7 @@ class FrizzAnalysisGUI:
                                f"Processing image {i+1}/{total_images}...")
                 
                 try:
-                    from .analysis import analyze_image
+                    from src.analysis import analyze_image
                     result = analyze_image(
                         filepath,
                         visualize=True,
@@ -619,10 +682,32 @@ class FrizzAnalysisGUI:
                 except Exception as e:
                     logger.error(f"Failed to process {filepath}: {e}")
                     logger.error(traceback.format_exc())
+                    
+                    # Log error to file
+                    self._log_error_to_file(
+                        f"Failed to process {Path(filepath).name}: {str(e)}",
+                        traceback.format_exc()
+                    )
+                    
+                    # Show detailed error in GUI for debugging
+                    self.root.after(0, self._update_status, f"❌ Error processing {Path(filepath).name}: {str(e)}")
                     # Continue with next image
                     continue
             
             if not results:
+                error_details = []
+                for i, filepath in enumerate(self.selected_files):
+                    error_details.append(f"Image {i+1}: {Path(filepath).name}")
+                
+                detailed_error = f"No images were successfully processed.\n\nFailed images:\n" + "\n".join(error_details)
+                
+                # Log to file
+                self._log_error_to_file(
+                    "No images were successfully processed",
+                    f"Failed images: {', '.join([Path(f).name for f in self.selected_files])}"
+                )
+                
+                self.root.after(0, lambda: messagebox.showerror("Processing Failed", detailed_error))
                 raise RuntimeError("No images were successfully processed")
             
             self.results = results
@@ -666,7 +751,13 @@ class FrizzAnalysisGUI:
             error_msg = f"Processing failed: {str(e)}"
             logger.error(error_msg)
             logger.error(traceback.format_exc())
-            self.root.after(0, messagebox.showerror, "Processing Error", error_msg)
+            
+            # Log detailed error to file
+            self._log_error_to_file(error_msg, traceback.format_exc())
+            
+            # Show detailed error with full traceback
+            detailed_error = f"{error_msg}\n\nFull error details:\n{traceback.format_exc()}"
+            self.root.after(0, lambda: messagebox.showerror("Processing Error", detailed_error))
             self.root.after(0, self._update_status, f"❌ Error: {str(e)}")
             self.root.after(0, self._processing_complete)
     
@@ -679,9 +770,13 @@ class FrizzAnalysisGUI:
         
         # Show message with option to open results folder
         if self.output_folder_path and self.output_folder_path.exists():
+            log_info = ""
+            if self.error_log_path and self.error_log_path.exists():
+                log_info = f"\n\nError log saved to:\n{self.error_log_path}"
+            
             response = messagebox.askyesno(
                 "Processing Complete",
-                f"Analysis complete!\n\nResults saved to:\n{self.output_folder_path}\n\nOpen results folder?",
+                f"Analysis complete!\n\nResults saved to:\n{self.output_folder_path}{log_info}\n\nOpen results folder?",
                 icon='info'
             )
             if response:

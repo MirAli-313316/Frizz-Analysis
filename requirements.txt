@@ -3,6 +3,8 @@ opencv-python>=4.8.0
 torch>=2.0.0
 torchvision>=0.15.0
 transformers>=4.30.0  # For BiRefNet model
+kornia>=0.7.0  # Required by BiRefNet model for image processing
+timm>=0.9.0  # PyTorch Image Models, required by BiRefNet model
 
 # Image Processing
 Pillow>=10.0.0

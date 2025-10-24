@@ -18,61 +18,61 @@ def run_command(command, shell=False):
             text=True,
             check=True
         )
-        print(f"✓ {command if isinstance(command, str) else ' '.join(command)}")
+        print(f"OK {command if isinstance(command, str) else ' '.join(command)}")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"✗ Command failed: {command}")
+        print(f"FAILED Command failed: {command}")
         print(f"Error: {e.stderr}")
         return False
 
 def main():
     """Build the desktop application."""
-    print("🔨 Building Frizz Analysis Desktop Application")
+    print("Building Frizz Analysis Desktop Application")
     print("=" * 50)
 
     # Check if PyInstaller is installed
     try:
         import PyInstaller
-        print("✓ PyInstaller is available")
+        print("OK PyInstaller is available")
     except ImportError:
         print("Installing PyInstaller...")
         if not run_command([sys.executable, "-m", "pip", "install", "pyinstaller"]):
-            print("✗ Failed to install PyInstaller")
+            print("FAILED Failed to install PyInstaller")
             return 1
 
     # Install the package in development mode first
-    print("\n📦 Installing package in development mode...")
+    print("\nInstalling package in development mode...")
     if not run_command([sys.executable, "-m", "pip", "install", "-e", "."]):
-        print("✗ Failed to install package")
+        print("FAILED Failed to install package")
         return 1
 
     # Build with PyInstaller
-    print("\n🏗️  Building executable with PyInstaller...")
+    print("\nBuilding executable with PyInstaller...")
     if not run_command([sys.executable, "-m", "PyInstaller", "app.spec", "--noconfirm"]):
-        print("✗ Failed to build application")
+        print("FAILED Failed to build application")
         return 1
 
     # Check what was created
     dist_dir = Path("dist")
     if dist_dir.exists():
-        print("\n📁 Build outputs:")
+        print("\nBuild outputs:")
         for item in dist_dir.iterdir():
             if item.is_dir():
-                print(f"  📂 {item.name}/")
+                print(f"  {item.name}/")
                 # List contents of first level directories
                 for subitem in item.iterdir():
                     if subitem.is_file() and not subitem.name.startswith('.'):
                         size_mb = subitem.stat().st_size / (1024 * 1024)
-                        print(f"    📄 {subitem.name} ({size_mb:.1f} MB)")
+                        print(f"    {subitem.name} ({size_mb:.1f} MB)")
 
-    print("\n✅ Build complete!")
-    print("\n🚀 To run the application:")
+    print("\nBuild complete!")
+    print("\nTo run the application:")
     if os.name == 'nt':  # Windows
-        print("  Double-click: dist/FrizzAnalysis/FrizzAnalysis.exe")
+        print("  Double-click: dist/FrizzAnalysis.exe")
     elif sys.platform == 'darwin':  # macOS
         print("  Open: dist/Frizz Analysis.app")
     else:  # Linux
-        print("  Run: dist/FrizzAnalysis/FrizzAnalysis")
+        print("  Run: dist/FrizzAnalysis")
 
     return 0
 

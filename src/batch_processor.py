@@ -11,8 +11,8 @@ from typing import List, Dict, Optional, Tuple
 import logging
 from datetime import datetime
 
-from .analysis import analyze_image, ImageAnalysis
-from .time_parser import TimePointParser, TimePoint
+from src.analysis import analyze_image, ImageAnalysis
+from src.time_parser import TimePointParser, TimePoint
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
